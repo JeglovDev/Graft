@@ -324,20 +324,34 @@ export function assertPrefixIndexed(graph: GraphV1, prefix: string): void {
   );
 }
 
-/** Immediate subdirs of `root` that are themselves git repos (have `.git`).
- * Used by workspace federation (Task 5). */
+/** Git repos (dirs with `.git`) directly under `root`, and one level further
+ * down inside plain grouping dirs: `apps/web`, `libs/sdk` in a checkout that
+ * keeps its clones in folders by kind. Names are root-relative posix paths.
+ * A repo is never searched for repos inside it. Used by workspace federation. */
 export function discoverWorkspaceChildren(root: string): string[] {
   const absRoot = resolve(root);
   const includes = readIncludeDirs(absRoot);
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(absRoot, { withFileTypes: true });
-  } catch {
-    return [];
+  const subdirs = (dir: string): string[] => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries.filter((e) => e.isDirectory() && !shouldSkipDir(e.name, includes)).map((e) => e.name);
+  };
+  const isRepo = (rel: string) => existsSync(join(absRoot, rel, ".git"));
+  const children: string[] = [];
+  for (const name of subdirs(absRoot)) {
+    if (isRepo(name)) {
+      children.push(name);
+      continue;
+    }
+    for (const inner of subdirs(join(absRoot, name))) {
+      if (isRepo(join(name, inner))) children.push(`${name}/${inner}`);
+    }
   }
-  return entries
-    .filter((e) => e.isDirectory() && !shouldSkipDir(e.name, includes) && existsSync(join(absRoot, e.name, ".git")))
-    .map((e) => e.name);
+  return children;
 }
 
 /** Every consumer's entry point to a graph's scopes: absent `meta.scopes` (old

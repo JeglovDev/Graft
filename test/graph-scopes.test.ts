@@ -171,6 +171,18 @@ test("discoverWorkspaceChildren finds immediate git children only", () => {
   rmSync(d, { recursive: true, force: true });
 });
 
+test("discoverWorkspaceChildren finds repos one level down inside plain grouping dirs", () => {
+  const d = fx({ "apps/web/x.ts": "1", "apps/api/y.ts": "1", "libs/sdk/z.ts": "1", "libs/notes.md": "1", "repoA/a.ts": "1" });
+  mkdirSync(join(d, "apps/web/.git"), { recursive: true });
+  mkdirSync(join(d, "apps/api/.git"), { recursive: true });
+  mkdirSync(join(d, "libs/sdk/.git"), { recursive: true });
+  mkdirSync(join(d, "repoA/.git"), { recursive: true });
+  mkdirSync(join(d, "repoA/group/inner/.git"), { recursive: true }); // inside a repo: never a child
+  mkdirSync(join(d, "node_modules/pkg/.git"), { recursive: true }); // skipped dir: never searched
+  assert.deepEqual(discoverWorkspaceChildren(d).sort(), ["apps/api", "apps/web", "libs/sdk", "repoA"]);
+  rmSync(d, { recursive: true, force: true });
+});
+
 test("A5: discoverScopes finds a marker under a SKIP_DIRS name once persisted via --include-dir state, absent otherwise", () => {
   const d = fx({ "build/package.json": "{}" });
   assert.deepEqual(discoverScopes(d), [{ prefix: "", label: "", markers: [] }], "build/ is skipped by default — no scope found");

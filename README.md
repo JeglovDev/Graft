@@ -413,6 +413,39 @@ graft --dir <path>                   # use a context dir other than <repo>/graft
 graft --version, -v                  # print the installed version and exit
 ```
 
+**Keeping the graph out of every checkout.** Set `GRAFT_STORE` to a directory
+(for example `~/.graft/graphs`) and each repo's graph and local settings live
+under `<store>/<repo-path-with-dashes>/` instead of `<repo>/graft/` and
+`<repo>/.graft/`. Nothing is written into the repo, `.gitignore` and `.ignore`
+included. Unlike `--dir`/`GRAFT_DIR`, which name one directory, a store covers
+every repo on the machine, so it fits a user-level MCP server entry:
+
+```bash
+claude mcp add -s user graft -e GRAFT_STORE='~/.graft/graphs' -- graft mcp
+```
+
+`--dir` and `GRAFT_DIR` still win when set.
+
+**Quiet output.** Every retrieval result starts with a `[graft] tokens saved ≈ N`
+estimate and asks the agent to report the turn's total to you. Set
+`GRAFT_NO_SAVINGS=1` to leave both out.
+
+**Leaving vendored and generated files out.** Beyond the built-in skip list
+(`node_modules/`, `vendor/`, `dist/`, …) and the 1 MB cap, graft skips any file
+Git marks `linguist-vendored` or `linguist-generated`, the attributes GitHub
+Linguist already reads. That covers libraries copied into an ordinary folder,
+such as `jquery.min.js` in `www/js/`, which nothing else can tell apart from the
+repo's own code. Put the rules in `.gitattributes` to share them, or in the
+local `.git/info/attributes` to keep them out of the repo:
+
+```gitattributes
+www/js/*.min.js     linguist-vendored
+www/js/leaflet.js   linguist-vendored
+www/js/app.js       -linguist-vendored   # re-admit one file a broader rule caught
+```
+
+The next query's automatic refresh picks the change up; no rebuild flag needed.
+
 Method calls resolve through the receiver's type — constructor assignments
 (`self.router = APIRouter()`) and type annotations, not just the call-site
 name — so `callers`/`grep --in` return calls bound to the right
@@ -474,7 +507,14 @@ Graft supports these layouts:
   auto-splits: each child gets its own (git-ignored) `graft/`, and the parent
   gets a `graft/workspace.json` index. Queries from the parent federate across
   every child, always labeled `<child>/`. Run `graft build` inside a child to
-  work on just that repo.
+  work on just that repo. Clones kept one level down in plain grouping folders
+  (`services/api`, `libs/sdk`) count as children too.
+- **A repo of its own that is really a folder of clones** (a few docs and
+  scripts at the top, the actual repositories git-ignored under `services/`
+  or similar). Its own `.git` keeps it from auto-splitting, and ignored clones
+  are invisible to `--follow-nested-repos`. Run `graft build --workspace` once:
+  it splits exactly like a folder of repos, and the choice is saved in
+  `.graft/config.json`. `graft build --no-workspace` goes back to one graph.
 
 In every layout, narrow to one sub-project with `graft ask "<task>" --in <scope>/`
 once you know where you're working.

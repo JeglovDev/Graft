@@ -6,6 +6,7 @@ import type { GraphV1, EdgeV1 } from '../graph/types.js';
 // question in both places, and one set of calibrated numbers beats two.
 import { HIGH_FLOOR, STRONG_FLOOR } from '../ask/fuse.js';
 import { dollarsSaved, formatDollars } from '../context/price.js';
+import { savingsEnabled } from '../context/savings.js';
 
 const C = {
   indigo: (s: string) => `\x1b[38;2;84;111;255m${s}\x1b[0m`,
@@ -129,7 +130,7 @@ export function formatRetrieval(ask: AskJson, cap = 5): string | null {
   if (!hits.length) return null;
   const body = retrievalBody(hits);
   const saved = retrievalTokensSaved(ask, cap);
-  if (saved <= 0) return body;
+  if (saved <= 0 || !savingsEnabled()) return body;
   const base = tokensOf(ask.saved!.baselineChars);
   const pct = Math.round((saved / base) * 100);
   return (

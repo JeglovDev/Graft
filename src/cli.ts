@@ -27,7 +27,7 @@ import { openBrowser, signupUrl, startHandoff } from "./brain/signup.js";
 import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "./graph/refresh.js";
-import { isWorkspaceBuildRoot, readWorkspace } from "./graph/workspace.js";
+import { clearParentGraft, isWorkspaceBuildRoot, readWorkspace } from "./graph/workspace.js";
 import { nearestGraftRoot } from "./graph/root.js";
 import { unsupportedExtensions, supportedExtensions } from "./graph/source-files.js";
 import { discoverWorkspaceChildren } from "./graph/scopes.js";
@@ -351,6 +351,12 @@ program
     "exclude untracked nested Git clones; persisted for later builds and automatic refreshes (default)",
   )
   .option(
+    "--workspace",
+    "build this repo as a workspace of the Git clones inside it (directly or one grouping folder down), " +
+      "each with its own graph and queries federated from here, even though it has its own .git; persisted",
+  )
+  .option("--no-workspace", "build this repo as one graph again and drop its workspace index; persisted (default)")
+  .option(
     "--include-dir <name>",
     "override SKIP_DIRS for this repo's walks — repeatable (e.g. --include-dir build --include-dir tools); " +
       "persisted, so a later build (and the hooks/refresh path) include it without the flag; dot-dirs are never overridable",
@@ -380,6 +386,7 @@ program
       onlyDir?: string[];
       followSubmodules?: boolean;
       followNestedRepos?: boolean;
+      workspace?: boolean;
       gitignore?: boolean;
       ignore?: boolean;
     },
@@ -441,8 +448,17 @@ program
     if (followNestedReposWasExplicit && typeof opts.followNestedRepos === "boolean") {
       buildConfigPatch.followNestedRepos = opts.followNestedRepos;
     }
+    const workspaceWasExplicit = command.getOptionValueSource("workspace") === "cli";
+    if (workspaceWasExplicit && typeof opts.workspace === "boolean") {
+      buildConfigPatch.workspace = opts.workspace;
+    }
     if (Object.keys(buildConfigPatch).length > 0) {
       patchBuildConfig(resolve(dir), buildConfigPatch);
+    }
+    // An existing workspace.json keeps a root a workspace on its own, so turning
+    // the mode off has to drop the index, not just the persisted choice.
+    if (workspaceWasExplicit && opts.workspace === false && readWorkspace(resolve(dir), program.opts<GlobalOpts>().dir)) {
+      clearParentGraft(resolve(dir), program.opts<GlobalOpts>().dir);
     }
     const engine = engineFrom();
     const fmt = (o: Record<string, number>) =>
@@ -551,7 +567,10 @@ program
     for (const e of g.errors) console.error(`✗ ${e}`);
 
     const rel = relative(process.cwd(), g.contextDir) || "graft";
-    if (process.env.GRAFT_NO_GITIGNORE) {
+    const inRepo = !relative(buildRoot, g.contextDir).startsWith("..");
+    if (!inRepo) {
+      console.log(`  graph lives outside the repo at ${g.contextDir}, no ignore entry needed.`);
+    } else if (process.env.GRAFT_NO_GITIGNORE) {
       console.log(`  ${rel}/ is a local cache — add it to your gitignore if you want it untracked.`);
     } else {
       console.log(`  ${rel}/ is git-ignored (added automatically) — a local cache; teammates run \`graft build\` to get their own.`);

@@ -10,7 +10,8 @@
  * outside had to change when it moved.
  */
 import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
-import { join, dirname, isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
+import { join, dirname, isAbsolute, resolve } from 'node:path';
 
 export interface Stats {
   nodeCount: number; edgeCount: number; languages: string[];
@@ -29,6 +30,41 @@ export function emptyStats(): Stats {
 const LOCK_FILE = '.sync.lock';
 
 /**
+ * The machine-wide store `GRAFT_STORE` names, or null when unset. With a store,
+ * nothing graft generates lands in the repo: each repo gets its own entry under
+ * the store instead of `<repo>/graft/` and `<repo>/.graft/`. The env var is set
+ * once (e.g. in a user-level MCP server entry) and covers every repo on the
+ * machine, which a per-repo `GRAFT_DIR` cannot. A leading `~` is expanded
+ * because MCP configs pass env values through without a shell.
+ */
+function storeRoot(): string | null {
+  const raw = process.env.GRAFT_STORE;
+  if (!raw) return null;
+  if (raw === '~') return homedir();
+  if (raw.startsWith('~/')) return join(homedir(), raw.slice(2));
+  return resolve(raw);
+}
+
+/** A repo's entry name in the store: its absolute path with separators turned
+ * into dashes (`/work/api` → `-work-api`), readable in a plain `ls`. */
+export function storeKey(projectDir: string): string {
+  return resolve(projectDir).replace(/[\\/:]/g, '-');
+}
+
+/** Where a repo's generated state lives: the repo itself, or its store entry. */
+function stateHome(projectDir: string): string {
+  const store = storeRoot();
+  return store ? join(store, storeKey(projectDir)) : projectDir;
+}
+
+/** The context dir a repo gets when nothing overrides it: `<repo>/graft`, or
+ * `<store>/<key>/graft` under `GRAFT_STORE`. The one default every resolver
+ * (`contextDirFor`, {@link resolveContextDir}) falls back to. */
+export function defaultContextDir(projectDir: string): string {
+  return join(stateHome(projectDir), 'graft');
+}
+
+/**
  * Where the pieces this module manages (the stats cache, the sync lock,
  * per-session state, the upkeep stamp) actually live when no caller-supplied
  * override is available. The Claude Code hooks, `sync-run`, the statusline,
@@ -36,13 +72,13 @@ const LOCK_FILE = '.sync.lock';
  * `--dir` — unlike a direct CLI invocation, which threads one through
  * `contextDirFor` (`context/node-file.ts`). This mirrors that same override
  * precedence for those entry points: `GRAFT_DIR` wins over the default
- * `<projectDir>/graft`, the same env var `resolveConfig` already honors for
- * the `--deep` LLM path. A relative `GRAFT_DIR` resolves against `projectDir`
- * so it holds regardless of the caller's cwd.
+ * ({@link defaultContextDir}), the same env var `resolveConfig` already honors
+ * for the `--deep` LLM path. A relative `GRAFT_DIR` resolves against
+ * `projectDir` so it holds regardless of the caller's cwd.
  */
 export function resolveContextDir(projectDir: string): string {
   const override = process.env.GRAFT_DIR;
-  if (!override) return join(projectDir, 'graft');
+  if (!override) return defaultContextDir(projectDir);
   return isAbsolute(override) ? override : join(projectDir, override);
 }
 
@@ -102,6 +138,10 @@ export interface BuildConfig {
    * checkout someone parked in the tree. Absent/false keeps the historical
    * boundary. */
   followNestedRepos?: boolean;
+  /** Build this repo as a workspace of the nested Git clones inside it, even
+   * though it has its own `.git`. Without it a repo root is never a workspace:
+   * one stray clone parked in a tree must not change how that tree is indexed. */
+  workspace?: boolean;
   /** The Trail brain this repo's rules come from: the brain id and the token to
    * read it with. Persisted here — in the git-ignored `.graft/` — rather than in
    * `~/.graft/`, because a brain belongs to one repository and two checkouts on
@@ -114,11 +154,13 @@ export interface BuildConfig {
  * custom `--dir` builds cannot erase or redirect the persisted choice. */
 export const BUILD_CONFIG_DIR = '.graft';
 
-export function buildConfigPath(d: string): string { return join(d, BUILD_CONFIG_DIR, 'config.json'); }
+export function buildConfigPath(d: string): string { return join(stateHome(d), BUILD_CONFIG_DIR, 'config.json'); }
 
 /** Keep local build configuration out of Git without coupling it to the
- * generated graph directory. Best-effort, matching graph-cache ignore setup. */
+ * generated graph directory. Best-effort, matching graph-cache ignore setup.
+ * A store keeps the config out of the repo, so there is nothing to ignore. */
 function ensureBuildConfigIgnored(d: string): void {
+  if (storeRoot()) return;
   const path = join(d, '.gitignore');
   let current = '';
   try { current = readFileSync(path, 'utf8'); } catch { /* no .gitignore yet */ }
@@ -157,6 +199,11 @@ export function readIncludeDirs(d: string): Set<string> | undefined {
 /** Missing and explicit false both retain the backwards-compatible default. */
 export function readFollowSubmodules(d: string): boolean {
   return readBuildConfig(d)?.followSubmodules === true;
+}
+
+/** Missing and explicit false both retain the backwards-compatible default. */
+export function readWorkspaceOptIn(d: string): boolean {
+  return readBuildConfig(d)?.workspace === true;
 }
 
 /** Missing and explicit false both retain the backwards-compatible default. */

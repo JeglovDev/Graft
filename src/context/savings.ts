@@ -22,6 +22,18 @@ export interface Savings {
   baselineChars: number;
 }
 
+/**
+ * Whether tool output carries the savings estimate at all. `GRAFT_NO_SAVINGS`
+ * drops it everywhere: the estimate and the nudge that asks the agent to end
+ * every reply with a "graft saved ~N tokens" line. For users who don't want
+ * that line in their conversations, and it also saves the tokens the footer
+ * itself costs on every call. Same truthy parsing as the other kill switches.
+ */
+export function savingsEnabled(): boolean {
+  const v = process.env.GRAFT_NO_SAVINGS;
+  return v === undefined || v === '' || v === '0' || v === 'false';
+}
+
 /** Rough tokens for a byte length (≈ 4 chars/token; good enough for an estimate). */
 export function toTokens(chars: number): number {
   return Math.round(chars / 4);
@@ -111,7 +123,7 @@ export function savingsTurnNudge(savedTokens: number): string {
  * no baseline, or the output isn't actually smaller than reading the files
  * (tiny files, where the pointers cost more than the source). */
 export function savingsLine(body: string, saved: Savings | undefined): string {
-  if (!saved || saved.baselineChars <= 0) return '';
+  if (!savingsEnabled() || !saved || saved.baselineChars <= 0) return '';
   const pack = toTokens(body.length);
   const base = toTokens(saved.baselineChars);
   if (base <= pack) return '';

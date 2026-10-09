@@ -26,6 +26,7 @@ import { join } from "node:path";
 import matter from "gray-matter";
 import { contentHash, normalizeName } from "../util/id.js";
 import { relPosix, stripTrailingSlashes } from "../util/paths.js";
+import { defaultContextDir } from "../util/state.js";
 // Value-only import of a constant; `write.ts` pulls in nothing from here, so no cycle.
 import { GRAPH_DIR } from "../graph/write.js";
 
@@ -105,10 +106,11 @@ export function digestSources(sources: SourceRef[]): string {
 
 /** Absolute path of the `graft/` directory for a repo root. Visible (not
  * dot-prefixed) on purpose: default ripgrep skips hidden dirs, so the agent's
- * grep/ls/find reflex must be able to land on the graph. */
+ * grep/ls/find reflex must be able to land on the graph. Under `GRAFT_STORE`
+ * it moves out of the repo entirely (see `defaultContextDir`). */
 export function contextDirFor(root: string, override?: string): string {
   if (override) return override;
-  return join(root, "graft");
+  return defaultContextDir(root);
 }
 
 /**

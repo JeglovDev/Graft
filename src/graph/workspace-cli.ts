@@ -5,6 +5,7 @@
  * engine dependencies). The federated command bodies live in `workspace.ts`;
  * this file only renders them and wires the child builds through the engine.
  */
+import { isAbsolute, join, relative } from "node:path";
 import { Graft } from "../engine.js";
 import { contextDirFor, ensureGitignored } from "../context/node-file.js";
 import { patchBuildConfig, type BuildConfig } from "../util/state.js";
@@ -80,9 +81,16 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
   );
   // Each child self-ignored during its own build; the parent's federation
   // index (graft/workspace.json) is written outside buildGraph, so ignore it here too.
-  ensureGitignored(root, contextDirFor(root, opts.override));
-  console.log(`✓ workspace: ${children.length} repos federated → graft/workspace.json`);
-  console.log(`  graft/ is git-ignored — each teammate runs \`graft build\` to regenerate it locally.`);
+  const indexDir = contextDirFor(root, opts.override);
+  ensureGitignored(root, indexDir);
+  const rel = relative(root, indexDir);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    console.log(`✓ workspace: ${children.length} repos federated → ${join(indexDir, "workspace.json")}`);
+    console.log(`  graphs live outside the repos, no ignore entries needed.`);
+  } else {
+    console.log(`✓ workspace: ${children.length} repos federated → graft/workspace.json`);
+    console.log(`  graft/ is git-ignored — each teammate runs \`graft build\` to regenerate it locally.`);
+  }
 }
 
 export function runWorkspaceAsk(

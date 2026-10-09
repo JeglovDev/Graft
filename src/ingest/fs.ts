@@ -56,7 +56,8 @@ export function shouldSkipDir(name: string, includes?: ReadonlySet<string>): boo
 /**
  * Recursively list all files under a directory. Skips dot-directories,
  * dependency/build directories (node_modules, dist, …) not named in
- * `includes`, and files over 1 MB.
+ * `includes`, files over 1 MB, and, in a Git worktree, files Git marks
+ * `linguist-vendored` or `linguist-generated` ({@link externalByAttributes}).
  * In a Git worktree, tracked files plus untracked, non-ignored files come from
  * `git ls-files`; this gives indexing exactly Git's nested `.gitignore`,
  * negation, and global-exclude semantics. Non-Git directories retain the plain
@@ -238,8 +239,13 @@ function gitVisibleFiles(
     });
   }
 
+  const external = externalByAttributes(
+    root,
+    [...entries].filter(([, e]) => !e.gitlink && !e.nested).map(([rel]) => rel),
+  );
   const out = new Set<string>();
   for (const [rel, entry] of entries) {
+    if (external.has(rel)) continue;
     const abs = resolve(root, rel);
     // Filter against the original superproject path. Otherwise a submodule
     // mounted at vendor/ or build/ would bypass the parent's skip policy when
@@ -302,9 +308,11 @@ function gitVisibleFilesShallow(root: string, includes?: ReadonlySet<string>): s
   );
   if (result.status !== 0 || result.error || typeof result.stdout !== "string") return null;
 
+  const rels = result.stdout.split("\0").filter((rel) => rel && !skippedPath(rel, includes));
+  const external = externalByAttributes(root, rels);
   const out: string[] = [];
-  for (const rel of result.stdout.split("\0")) {
-    if (!rel || skippedPath(rel, includes)) continue;
+  for (const rel of rels) {
+    if (external.has(rel)) continue;
     const abs = resolve(root, rel);
     try {
       const stat = lstatSync(abs);
@@ -317,6 +325,42 @@ function gitVisibleFilesShallow(root: string, includes?: ReadonlySet<string>): s
     out.push(abs);
   }
   return out;
+}
+
+/** Git attributes that mark a file as not the repo's own code. The names are
+ * GitHub Linguist's, the de-facto convention for "vendored library" and
+ * "generated output", so a repo that already tells GitHub to discount a file
+ * gets the same treatment here with no graft-specific config. */
+const EXTERNAL_ATTRS = ["linguist-vendored", "linguist-generated"];
+
+/**
+ * The subset of `rels` (paths relative to `root`) marked vendored or generated.
+ *
+ * One `git check-attr --stdin` call covers the whole list and resolves every
+ * attribute source Git knows: committed `.gitattributes` files and the local,
+ * never-committed `.git/info/attributes`. The latter is what lets a checkout
+ * drop a bundled `jquery.min.js` from the graph without touching the repo.
+ * Linguist semantics: `attr` and `attr=true` mark the file, `-attr` and
+ * `attr=false` clear a broader rule. A failed call marks nothing, so the walk
+ * degrades to the historical file set rather than losing files.
+ */
+function externalByAttributes(root: string, rels: string[]): Set<string> {
+  const marked = new Set<string>();
+  if (rels.length === 0) return marked;
+  const result = spawnSync("git", ["check-attr", "-z", "--stdin", ...EXTERNAL_ATTRS], {
+    cwd: root,
+    input: rels.join("\0"),
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "ignore"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.status !== 0 || result.error || typeof result.stdout !== "string") return marked;
+  const fields = result.stdout.split("\0");
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const value = fields[i + 2];
+    if (value === "set" || value === "true") marked.add(fields[i]);
+  }
+  return marked;
 }
 
 /** A path (git-relative, either separator) is skipped when any of its

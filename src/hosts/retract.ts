@@ -34,6 +34,7 @@ import { antigravitySkillTargets } from './antigravity.js';
 import { claudeGlobalTargets } from './claude-global.js';
 import { claudeTargets } from '../claude/init.js';
 import { isGraftAllowEntry, isGraftFooterRegex } from '../claude/settings-merge.js';
+import { defaultContextDir } from '../util/state.js';
 import type { WriteScope } from './plan.js';
 
 /** What a retraction did to one target. */
@@ -461,7 +462,7 @@ function targets(repo: string, opts: RetractOpts): Target[] {
   // 5. The graph cache and the ignore entries that admit it. Last, so a failure
   //    here can't strand the wiring half-retracted.
   if (opts.cache !== false) {
-    const cache = join(repo, 'graft');
+    const cache = defaultContextDir(repo);
     const gitignore = join(repo, '.gitignore');
     const ignore = join(repo, '.ignore');
     for (const t of [

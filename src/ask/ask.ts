@@ -17,7 +17,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import matter from "gray-matter";
 import { contextDirFor } from "../context/node-file.js";
-import { withSavings, savingsFor, savingsTurnNudge, type Savings } from "../context/savings.js";
+import { withSavings, savingsEnabled, savingsFor, savingsTurnNudge, type Savings } from "../context/savings.js";
 import { loadGraphCached, loadAskIndexCached } from "../graph/load.js";
 import {
   assertPrefixIndexed,
@@ -1554,7 +1554,7 @@ function escalationNudge(r: AskResult): string {
  * Header, not footer, for the reason documented on `withSavings`: a trailing
  * line dies to `head -N` and to host output truncation. */
 function askSavingsLine(r: AskResult, body: string): string {
-  if (!r.saved || r.saved.baselineChars <= 0) return "";
+  if (!savingsEnabled() || !r.saved || r.saved.baselineChars <= 0) return "";
   const pack = toTokens(body.length);
   const base = toTokens(r.saved.baselineChars);
   if (base <= pack) return ""; // no saving to claim (tiny files); stay quiet

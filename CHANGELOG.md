@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`GRAFT_STORE` keeps graphs out of the checkout.** Each repo's graph and
+  `.graft/config.json` move to `<store>/<repo-path-with-dashes>/`, and build no
+  longer edits `.gitignore` or `.ignore`. One setting covers every repo, so it
+  fits a user-level MCP server; `--dir` and `GRAFT_DIR` still take precedence.
+- **Files Git marks `linguist-vendored` or `linguist-generated` stay out of the
+  graph.** Libraries copied into an ordinary folder (`www/js/jquery.min.js`)
+  used to be indexed as the repo's own code; on one PHP site they were two thirds
+  of all nodes. Rules come from `.gitattributes` or the local
+  `.git/info/attributes`, so a checkout can set them without committing.
+- **`graft build --workspace`** builds a repo that has its own `.git` as a
+  workspace of the clones inside it, for checkouts that git-ignore a folder of
+  separate repositories. Workspace discovery also finds clones one level down
+  in plain grouping folders (`services/api`).
+
+- **`GRAFT_NO_SAVINGS=1` drops the savings footer** from every tool output:
+  the `[graft] tokens saved ≈ N` estimate and the nudge asking the agent to end
+  its reply with a "graft saved ~N tokens" line.
+
+### Fixed
+
+- **`npm test` no longer fails for a developer with `GRAFT_STORE`,
+  `GRAFT_DIR` or `GRAFT_NO_SAVINGS` set.** The runner clears them; tests that
+  need them set them.
+
 ## 0.19.0
 
 ### Added

@@ -80,6 +80,18 @@ test('withSavings: returns the body untouched when there is nothing to claim', (
   assert.equal(withSavings('body', undefined), 'body');
 });
 
+test('GRAFT_NO_SAVINGS drops the estimate and the report-it nudge entirely', () => {
+  const prev = process.env.GRAFT_NO_SAVINGS;
+  process.env.GRAFT_NO_SAVINGS = '1';
+  try {
+    assert.equal(savingsLine('body', { files: 2, baselineChars: 8000 }), '');
+    assert.equal(withSavings('body', { files: 2, baselineChars: 8000 }), 'body');
+  } finally {
+    if (prev === undefined) delete process.env.GRAFT_NO_SAVINGS; else process.env.GRAFT_NO_SAVINGS = prev;
+  }
+  assert.notEqual(savingsLine('body', { files: 2, baselineChars: 8000 }), '', 'unset means the default, on');
+});
+
 test('the turn nudge carries no dollar figure until a rate is set', () => {
   setInputRate(null);
   const footer = savingsLine('body', { files: 2, baselineChars: 8000 });

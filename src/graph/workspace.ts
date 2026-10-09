@@ -37,6 +37,7 @@ import {
 import { edgeWalk, resolveSymbol, type Direction } from "./traverse.js";
 import { wiringPath } from "./write.js";
 import type { GraphV1 } from "./types.js";
+import { readWorkspaceOptIn } from "../util/state.js";
 import {
   ask,
   type AskHit,
@@ -93,10 +94,11 @@ export function writeWorkspace(root: string, ws: WorkspaceV1, override?: string)
 /** A parent is a workspace BUILD target when it has no own `.git` and ≥2 git
  * children — or it was already split (a `workspace.json` is present). The
  * no-own-`.git` guard keeps a normal repo with git submodules from being
- * mistaken for a workspace. */
+ * mistaken for a workspace; a repo that really is a folder of clones with a
+ * few files of its own opts in with `graft build --workspace`. */
 export function isWorkspaceBuildRoot(root: string, override?: string): boolean {
   if (readWorkspace(root, override)) return true;
-  if (existsSync(join(root, ".git"))) return false;
+  if (existsSync(join(root, ".git")) && !readWorkspaceOptIn(root)) return false;
   return discoverWorkspaceChildren(root).length >= 2;
 }
 

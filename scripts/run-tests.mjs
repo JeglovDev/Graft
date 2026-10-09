@@ -43,10 +43,19 @@ const gitEnv = {
   GIT_CONFIG_KEY_1: "tag.gpgsign", GIT_CONFIG_VALUE_1: "false",
 };
 
+// Machine settings that change output the tests assert on: a developer who keeps
+// graphs in a store (GRAFT_STORE) or elsewhere (GRAFT_DIR) would fail every test
+// that expects a fixture's graph at `<repo>/graft`, and GRAFT_NO_SAVINGS strips
+// the footers the savings tests check. Tests that exercise them set them.
+const env = { ...process.env, ...gitEnv };
+delete env.GRAFT_STORE;
+delete env.GRAFT_DIR;
+delete env.GRAFT_NO_SAVINGS;
+
 const result = spawnSync(process.execPath, ["--import", "tsx", "--test", ...files], {
   cwd: repoRoot,
   stdio: "inherit",
-  env: { ...process.env, ...gitEnv },
+  env,
 });
 
 if (result.error) {
