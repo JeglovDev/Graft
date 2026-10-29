@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { underGraft, main, lastFileScopeHint, promptAskTimeout } from '../src/claude/hooks.js';
@@ -36,10 +36,20 @@ test('post-edit ignores edits inside graft/', async () => {
   assert.equal(readStats(d), null, 'no state written for graft/ edits');
 });
 
-// helper: hooks.ts reads process.env.GRAFT_TEST_STDIN first (test seam), else fd 0.
+// helper: hooks.ts reads process.env.GRAFT_TEST_STDIN first (test seam), else fd 0. A Trail home of the test's own
+// when none is set (b7 review): session start reads every-repo learnings and names, once, what trail init kept,
+// which must never reach the real ~/.trail.
 async function runWithStdin(text: string, fn: () => Promise<void>): Promise<void> {
   process.env.GRAFT_TEST_STDIN = text;
-  try { await fn(); } finally { delete process.env.GRAFT_TEST_STDIN; }
+  const ownHome = process.env.TRAIL_HOME === undefined;
+  if (ownHome) process.env.TRAIL_HOME = mkdtempSync(join(tmpdir(), 'graft-hooks-trail-'));
+  try { await fn(); } finally {
+    delete process.env.GRAFT_TEST_STDIN;
+    if (ownHome) {
+      rmSync(process.env.TRAIL_HOME!, { recursive: true, force: true });
+      delete process.env.TRAIL_HOME;
+    }
+  }
 }
 
 test('post-edit-sync marks dirty and kicks off the background sync', async () => {
@@ -328,6 +338,32 @@ test('prompt hook omits --in on a single-scope repo even with lastFile set', asy
   }
 });
 
+test("prompt hook's graft child never waits for a repo's first build", async () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-prompt-wait-'));
+  mkdirSync(join(d, 'graft', '.graph'), { recursive: true });
+  writeFileSync(join(d, 'graft', '.graph', 'wiring.json'),
+    JSON.stringify({ meta: { nodeCount: 0, edgeCount: 0, languages: [] }, nodes: [], edges: [] }));
+  const stub = join(d, 'env-stub.cjs');
+  const seen = join(d, 'wait-seen.txt');
+  writeFileSync(
+    stub,
+    `require('fs').writeFileSync(${JSON.stringify(seen)}, String(process.env.GRAFT_FIRST_BUILD_WAIT_MS));\n` +
+      `process.stdout.write(JSON.stringify({ query: '', mode: 'lexical', hits: [], coverage: 1 }));\n`,
+  );
+  process.env.CLAUDE_PROJECT_DIR = d;
+  process.env.GRAFT_TEST_CLI = stub;
+  try {
+    await runWithStdin(
+      JSON.stringify({ session_id: 'p-wait', prompt: 'how does auth work here' }),
+      () => main('prompt'),
+    );
+    assert.equal(readFileSync(seen, 'utf8'), '0', 'it starts the build and answers within the hook budget');
+  } finally {
+    delete process.env.GRAFT_TEST_CLI;
+    delete process.env.CLAUDE_PROJECT_DIR;
+  }
+});
+
 test('prompt hook omits --in and logs to stderr when lastFile is ambiguous across scopes', async () => {
   const d = mkdtempSync(join(tmpdir(), 'graft-prompt-scope-'));
   mkdirSync(join(d, 'graft', '.graph'), { recursive: true });
@@ -375,7 +411,7 @@ test('prompt branch stays silent and writes no session when graft is not built',
   process.env.CLAUDE_PROJECT_DIR = d;
   const chunks: string[] = [];
   const orig = process.stdout.write.bind(process.stdout);
-  (process.stdout as any).write = (s: any) => { chunks.push(String(s)); return true; };
+  (process.stdout as any).write = (s: any, ...rest: any[]) => (typeof s === 'string' ? (chunks.push(s), true) : orig(s, ...rest));
   try {
     await runWithStdin(
       JSON.stringify({ session_id: 'p1', prompt: 'how does pkce verification work' }),
@@ -387,6 +423,50 @@ test('prompt branch stays silent and writes no session when graft is not built',
   }
   assert.equal(chunks.join(''), '', 'no stdout when graft ask unavailable (no dist/cli.js in temp dir)');
   assert.equal(existsSync(join(d, 'graft', '.cache', 'session', 'p1.json')), false, 'no session file on no-op');
+});
+
+for (const prompt of [
+  '<task-notification><task-id>abc</task-id><status>completed</status></task-notification>',
+  '  \n<task-notification>Background analysis completed</task-notification>',
+]) {
+  test('prompt hook ignores a background task notification without retrieval or session writes', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'graft-notification-'));
+    const { stub, argsFile } = writeAskArgsStub(d);
+    const output: string[] = [];
+    const originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: unknown) => { output.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    process.env.CLAUDE_PROJECT_DIR = d;
+    process.env.GRAFT_TEST_CLI = stub;
+    try {
+      await runWithStdin(JSON.stringify({ session_id: 'background', prompt }), () => main('prompt'));
+      assert.equal(existsSync(argsFile), false, 'machine notice must not invoke graft ask');
+      assert.equal(existsSync(join(d, 'graft', '.cache', 'session', 'background.json')), false);
+      assert.equal(output.join(''), '', 'machine notice must not inject retrieval guidance');
+    } finally {
+      process.stdout.write = originalWrite;
+      delete process.env.GRAFT_TEST_CLI;
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  });
+}
+
+test('prompt hook still retrieves a human query mentioning the notification tag later', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-notification-human-'));
+  const { stub, argsFile } = writeAskArgsStub(d);
+  const prompt = 'Explain how the <task-notification> tag is handled in this project';
+  process.env.CLAUDE_PROJECT_DIR = d;
+  process.env.GRAFT_TEST_CLI = stub;
+  try {
+    await runWithStdin(JSON.stringify({ session_id: 'human', prompt }), () => main('prompt'));
+    const args: string[] = JSON.parse(readFileSync(argsFile, 'utf8'));
+    // Part 6 sends the prompt on stdin (`ask -`), never in argv: the ask ran for it.
+    assert.ok(args[0] === 'ask' && args.includes('-'));
+    // Part 6 keeps a count, never the prompt (spec section 6).
+    assert.equal(readSession(d, 'human').promptAsks, 1);
+  } finally {
+    delete process.env.GRAFT_TEST_CLI;
+    delete process.env.CLAUDE_PROJECT_DIR;
+  }
 });
 
 test('tool-savings sums the [graft] footer into the session total, keyed by session_id', async () => {
@@ -741,7 +821,7 @@ test('session-start reads INDEX.md from a GRAFT_DIR-relocated context dir', asyn
   process.env.GRAFT_DIR = 'elsewhere';
   const chunks: string[] = [];
   const orig = process.stdout.write.bind(process.stdout);
-  (process.stdout as any).write = (s: any) => { chunks.push(String(s)); return true; };
+  (process.stdout as any).write = (s: any, ...rest: any[]) => (typeof s === 'string' ? (chunks.push(s), true) : orig(s, ...rest));
   try {
     await runWithStdin('{}', () => main('session-start'));
   } finally {

@@ -105,7 +105,7 @@ const gateAsk = (over: Record<string, unknown> = {}) => ({
   ],
   ...over,
 }) as any;
-const freshSession = () => ({ lastQuery: null, perAgentQuery: {}, graftReads: 0, sourceReads: 0, savedTokens: 0, injectedPointers: [] as string[] });
+const freshSession = () => ({ graftReads: 0, sourceReads: 0, savedTokens: 0, injectedPointers: [] as string[] });
 
 test('relevantRetrieval injects on good coverage and records pointers', () => {
   const s = freshSession();
@@ -201,10 +201,9 @@ test('formatOrientation prepends a staleness banner when one is supplied', () =>
   assert.doesNotMatch(strip(formatOrientation(md, 1500)), /ahead of your working tree/);
 });
 
-test('renderSubagent shows agent name and its last query', () => {
-  const out = strip(renderSubagent('Explore', { lastQuery: null, perAgentQuery: { Explore: 'pkce flow' }, graftReads: 0, sourceReads: 0 }));
-  assert.match(out, /Explore/);
-  assert.match(out, /pkce flow/);
+test('renderSubagent shows the agent name', () => {
+  const out = strip(renderSubagent('Explore', { graftReads: 2, sourceReads: 0, savedTokens: 0 }));
+  assert.equal(out, '◤ Explore');
 });
 
 test('renderSubagent without a query still shows the agent', () => {

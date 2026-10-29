@@ -15,14 +15,16 @@
  *     without a path.
  *   • non-string values → dropped. Everything that crosses the wire is a bucket
  *     label or an enum member, so a raw count or a raw message cannot get out
- *     even under a key that happens to be allowed.
+ *     even under a key that happens to be allowed. Where the contract fixes a
+ *     key's values (`VALUES`), a value outside them is dropped too.
  */
-import { EVENTS } from './contract.js';
+import { EVENTS, allowedValue } from './contract.js';
 import type { AgentHost } from './contract.js';
 import { enqueue } from './queue.js';
 import { telemetryOn } from './gate.js';
 import { installId, patchState, readState, repoId } from './identity.js';
 import { runningVersion } from '../upkeep.js';
+import { brand } from '../brand.js';
 
 /** One queued event, exactly as it will be sent. */
 export interface QueuedEvent {
@@ -69,6 +71,10 @@ function commonProps(ctx: TrackContext): Record<string, string> {
     node_major: String(process.versions.node.split('.')[0]),
     ci: 'false', // an event only exists at all when the CI gate passed
     agent_host: detectHost(ctx.host, ctx.env ?? process.env),
+    // `trail` or `graft`: which name started this process. The share of
+    // queries under `trail` is how the rename is measured, and both names
+    // share one install id, so nobody is counted twice.
+    cli_name: brand(ctx.env ?? process.env),
   };
   if (ctx.repo) {
     try { props.repo_id = repoId(ctx.repo); } catch { /* unwritable cache — omit */ }
@@ -98,7 +104,7 @@ export function track(
 
     const properties = commonProps(ctx);
     for (const [k, v] of Object.entries(props)) {
-      if (allowed.has(k) && typeof v === 'string') properties[k] = v;
+      if (allowed.has(k) && typeof v === 'string' && allowedValue(event, k, v)) properties[k] = v;
     }
 
     const queued: QueuedEvent = {

@@ -21,6 +21,11 @@
  * (or a suspicious user, since the repo is public) reads to verify the claim.
  */
 
+/** Init's own kinds as `cold_start` counts them: skill, guardrail (always follow), preference (learning). */
+export const INIT_KINDS = ['skills', 'always_follow', 'learnings'] as const;
+/** An exact count up to init's 5 items, then one label. */
+const SMALL_COUNTS = ['0', '1', '2', '3', '4', '5', '6+'] as const;
+
 /* -------------------------------------------------------------------------- */
 /* the event → allowed-property-keys map                                      */
 /* -------------------------------------------------------------------------- */
@@ -50,15 +55,40 @@ export const EVENTS: Record<string, ReadonlySet<string>> = {
   /** A build threw. `stage`/`code` are enums; the message never travels. */
   build_failed: new Set<string>(['stage', 'code']),
   /** One query, from any surface. The DAU backbone and the dead-command detector. */
-  query: new Set<string>(['command', 'surface', 'hit']),
-  /** `graft brain push` in a repo with no brain, sending the user to Trail to
-   *  make one. Queued the moment the link is printed, so a signup somebody
-   *  walked away from is still counted — the settle below never fires for those,
-   *  and abandonment is exactly the thing a terminal handoff loses silently. */
-  brain_signup_opened: new Set<string>(),
+  query: new Set<string>(['command', 'surface', 'hit', 'notes']),
+  /** A trail command handing the agent a sign-in link to pass on. Queued the
+   *  moment the link is printed, so a sign-in somebody walked away from is still
+   *  counted — the settle below never fires for those. */
+  brain_signup_opened: new Set<string>(['mode', 'command', 'wording']),
   /** That handoff reaching an end. `outcome` is a closed set, so the reason a
    *  signup failed travels as a category and never as the error's own words. */
-  brain_signup_settled: new Set<string>(['outcome', 'duration_bucket']),
+  brain_signup_settled: new Set<string>(['outcome', 'mode', 'duration_bucket']),
+  /** `trail note` saved a session note (into `~/.trail/`). Whether it carries
+   *  a cost, and how many files it is about, as a bucket. The title, the text
+   *  and the paths never travel. The supply side of the notes loop; the
+   *  `notes` property on `query` is the demand side. */
+  note_saved: new Set<string>(['has_cost', 'touches_bucket', 'scope']),
+  /** Once a day per repo, from the session-start hook, for a repo trail runs
+   *  in: whether `.trail/` is committed there, how many learnings it holds,
+   *  as a bucket, and whether this machine shares it with a workspace. With
+   *  `repo_id` and the install id this counts devs and repos touched, and
+   *  repos with Trail committed. Paths and names never travel. */
+  repo_seen: new Set<string>(['trail_committed', 'learnings_bucket', 'workspace']),
+  /** At session start, when the learnings committed on HEAD went up since the
+   *  last session in that clone: how many came in and how many there are, as
+   *  buckets, and whether it's the clone's first look. Committed learnings
+   *  are trail's activation. Paths and titles never travel. */
+  learnings_committed: new Set<string>(['added_bucket', 'total_bucket', 'first_look']),
+  /** `trail init` read the repo's past Claude sessions, the review comments
+   *  on its merged PRs, or Claude Code's memory notes of it (`source`), for
+   *  learnings: how it went, how many sessions or reviewed PRs there were,
+   *  findings offered and saved, how many were left out for naming no code
+   *  (`filtered`), and how many of those offered and saved were the team's,
+   *  as buckets, how long it took, and the model. The look-back's own items
+   *  offered (shown or relayed) and kept, by kind, as exact counts (init shows
+   *  at most 5). The messages, the comments, the notes and the findings never travel. */
+  cold_start: new Set<string>(['source', 'outcome', 'sessions_bucket', 'reviews_bucket', 'offered_bucket', 'filtered_bucket', 'picked_bucket', 'team_offered_bucket', 'team_picked_bucket', 'duration_bucket', 'model',
+    ...INIT_KINDS.flatMap((k) => [`offered_${k}`, `kept_${k}`])]),
   /** One closed agent session, summarised. `graft_reads` vs `source_reads` is
    *  the single number that says whether an agent prefers graft to grep; the two
    *  `*_turns` buckets are the follow-up question — of the turns that used graft,
@@ -67,7 +97,77 @@ export const EVENTS: Record<string, ReadonlySet<string>> = {
     'graft_reads_bucket', 'source_reads_bucket', 'saved_tokens_bucket',
     'graft_turns_bucket', 'reported_turns_bucket',
   ]),
+
+  /* Learned skills (spec section 20). Every value is a member of a closed set
+   * in {@link VALUES}; a skill's name, its steps, a command, a prompt, a lesson
+   * or a path is never one of them, so none of those can travel. */
+
+  /** Trail offered to keep a skill (or a lesson, an update, a promotion): at which moment. */
+  skill_offered: new Set<string>(['moment']),
+  /** The person's answer to an offer. A withdrawn offer sends nothing. */
+  skill_answer: new Set<string>(['answer']),
+  /** A skill was saved: what it came from, and whose it is. */
+  skill_saved: new Set<string>(['from', 'scope']),
+  /** Trail changed a skill it wrote, on the person's yes or their own command (phase 2): how. */
+  skill_changed: new Set<string>(['op']),
+  /** A skill moved up a scope (phase 3). */
+  skill_promoted: new Set<string>(['to']),
+  /** A joined team repo was pulled (phase 3): how it went. */
+  team_pull: new Set<string>(['outcome']),
+  /** A skill the agent was given ran: whether its own check passed. */
+  skill_used: new Set<string>(['outcome']),
+  /** The weekly value line was said (phase 2): where it went. */
+  skill_value: new Set<string>(['channel']),
+  /** A skill stopped being offered to the agent as is: why. */
+  skill_stale: new Set<string>(['reason']),
+  /** A guardrail fired: which built-in one, and what it did. */
+  guardrail: new Set<string>(['class', 'outcome']),
+  /** A failing command matched a known wall: which one, and whether the person had kept a lesson for it. */
+  wall_hit: new Set<string>(['class', 'had_lesson']),
+  /** How long one hook took, as a bucket: which hook. */
+  hook_ms: new Set<string>(['event', 'bucket']),
 };
+
+/** The labels {@link hookMsBucket} returns. */
+export const HOOK_MS_BUCKETS = ['<50ms', '50-100ms', '100-300ms', '300ms-1s', '1-3s', '3s+'] as const;
+
+/**
+ * The values an event's key may take, where the contract fixes them. `track()`
+ * drops a value outside the set, key and all, so a call site that passes a
+ * skill's name, a prompt or an error line under an allowed key sends nothing
+ * for it. Every key of the skills events is listed here.
+ */
+export const VALUES: Record<string, Record<string, ReadonlySet<string>>> = {
+  cold_start: Object.fromEntries(INIT_KINDS.flatMap((k) => [`offered_${k}`, `kept_${k}`]).map((key) => [key, new Set(SMALL_COUNTS)])),
+  skill_offered: { moment: new Set(['asked', 'repeated', 'repaired', 'correction', 'update', 'drift', 'retire', 'promote']) },
+  skill_answer: { answer: new Set(['yes', 'no', 'show', 'none', 'off', 'retire']) },
+  skill_changed: { op: new Set(['update', 'extend', 'split', 'replace', 'retire', 'adopted', 'restore-version']) },
+  skill_value: { channel: new Set(['context', 'notice', 'list']) },
+  skill_saved: { from: new Set(['init', 'repeated', 'repaired', 'asked']), scope: new Set(['personal', 'repo', 'team']) },
+  skill_promoted: { to: new Set(['repo', 'team']) },
+  team_pull: { outcome: new Set(['updated', 'unchanged', 'diverged', 'failed']) },
+  skill_used: { outcome: new Set(['checked', 'failed', 'unchecked']) },
+  skill_stale: { reason: new Set(['failed', 'corrected', 'missing', 'unused', 'unfollowed']) },
+  guardrail: {
+    class: new Set(['no-timeout', 'prod-after-beta']),
+    outcome: new Set(['hint', 'ask', 'deny', 'sure-fail', 'avoided']),
+  },
+  wall_hit: {
+    class: new Set(['timeout-missing', 'zsh-no-match', 'git-https-auth', 'docker-rootless', 'npm-e401-eotp', 'claude-not-logged-in', 'enospc']),
+    had_lesson: new Set(['true', 'false']),
+  },
+  hook_ms: {
+    event: new Set(['session-start', 'prompt', 'pre-bash', 'pre-edit', 'tool-savings', 'post-bash', 'post-bash-fail', 'post-edit', 'post-edit-sync', 'stop']),
+    bucket: new Set(HOOK_MS_BUCKETS),
+  },
+};
+
+/** Whether `value` may go under `key` of `event`: always, unless {@link VALUES} fixes the key's values. */
+export function allowedValue(event: string, key: string, value: string): boolean {
+  if (!Object.hasOwn(VALUES, event)) return true;
+  const keys = VALUES[event]!;
+  return !Object.hasOwn(keys, key) || keys[key]!.has(value);
+}
 
 /** Stamped on every event by `track()`; not listed per event above. */
 export const COMMON_KEYS = [
@@ -77,6 +177,7 @@ export const COMMON_KEYS = [
   'node_major',
   'ci',
   'agent_host',
+  'cli_name',
   'repo_id',
 ] as const;
 
@@ -90,7 +191,7 @@ export type Surface = 'cli' | 'mcp' | 'hook';
 
 /** Which editor/agent graft is running under. Derived from the surface and the
  *  wiring on disk — never from a hostname, a username, or an env var's value. */
-export type AgentHost = 'claude-code' | 'cursor' | 'mcp' | 'cli';
+export type AgentHost = 'claude-code' | 'cursor' | 'copilot' | 'mcp' | 'cli';
 
 /**
  * The commands worth counting. A command absent here is simply not reported —
@@ -107,16 +208,17 @@ export function isTrackedCommand(name: string): name is TrackedCommand {
 }
 
 /**
- * How a `graft brain push` signup ended.
+ * How a sign-in handoff ended.
  *
- * Four categories and nothing else, because the alternative — the error string
+ * Five categories and nothing else, because the alternative — the error string
  * the CLI already prints — carries a repo slug and a URL. `timed_out` and
  * `no_tty` are deliberately apart: one is a person who opened the browser and
  * did not finish, the other is a machine that was never able to open one, and
  * treating them alike would read as a product problem where there is only a
- * remote shell.
+ * remote shell. `stopped` is Ctrl-C while waiting: a person changing their
+ * mind, not a browser that never came back.
  */
-export const BRAIN_SIGNUP_OUTCOMES = ['linked', 'timed_out', 'no_tty', 'bad_callback'] as const;
+export const BRAIN_SIGNUP_OUTCOMES = ['linked', 'timed_out', 'no_tty', 'bad_callback', 'stopped'] as const;
 export type BrainSignupOutcome = (typeof BRAIN_SIGNUP_OUTCOMES)[number];
 
 /** Where a failing build died. Coarse on purpose: enough to route a bug, not
@@ -197,6 +299,24 @@ export function countBucket(n: number): string {
   if (n < 50) return '20-49';
   if (n < 200) return '50-199';
   return '200+';
+}
+
+/** `{prefix}_skills`, `{prefix}_always_follow`, `{prefix}_learnings`: how many of each kind, exact to 5. */
+export function initKindCounts(prefix: 'offered' | 'kept', items: ReadonlyArray<{ kind: string }>): Record<string, string> {
+  const n = (kind: string) => items.filter((i) => i.kind === kind).length;
+  const small = (c: number) => (c > 5 ? '6+' : String(c));
+  return { [`${prefix}_skills`]: small(n('skill')), [`${prefix}_always_follow`]: small(n('guardrail')), [`${prefix}_learnings`]: small(n('preference')) };
+}
+
+/** One hook's wall-clock. The budgets are 50 ms (PreToolUse) and 300 ms (the
+ *  rest), so the labels split there. */
+export function hookMsBucket(ms: number): (typeof HOOK_MS_BUCKETS)[number] {
+  if (ms < 50) return '<50ms';
+  if (ms < 100) return '50-100ms';
+  if (ms < 300) return '100-300ms';
+  if (ms < 1000) return '300ms-1s';
+  if (ms < 3000) return '1-3s';
+  return '3s+';
 }
 
 /** Estimated tokens saved in one session — the README's central claim, in the

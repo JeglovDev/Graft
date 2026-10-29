@@ -9,9 +9,13 @@
  * on top of each other. `claude/state.ts` re-exports all of this, so nothing
  * outside had to change when it moved.
  */
-import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, dirname, isAbsolute, resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, statSync, openSync, writeSync, closeSync, fchmodSync, constants } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { join, dirname, isAbsolute } from 'node:path';
+import { mapDirFor } from '../context/map-dir.js';
+import { stateHome, storeRoot } from './store.js';
+
+export { storeKey } from './store.js';
 
 export interface Stats {
   nodeCount: number; edgeCount: number; languages: string[];
@@ -30,41 +34,6 @@ export function emptyStats(): Stats {
 const LOCK_FILE = '.sync.lock';
 
 /**
- * The machine-wide store `GRAFT_STORE` names, or null when unset. With a store,
- * nothing graft generates lands in the repo: each repo gets its own entry under
- * the store instead of `<repo>/graft/` and `<repo>/.graft/`. The env var is set
- * once (e.g. in a user-level MCP server entry) and covers every repo on the
- * machine, which a per-repo `GRAFT_DIR` cannot. A leading `~` is expanded
- * because MCP configs pass env values through without a shell.
- */
-function storeRoot(): string | null {
-  const raw = process.env.GRAFT_STORE;
-  if (!raw) return null;
-  if (raw === '~') return homedir();
-  if (raw.startsWith('~/')) return join(homedir(), raw.slice(2));
-  return resolve(raw);
-}
-
-/** A repo's entry name in the store: its absolute path with separators turned
- * into dashes (`/work/api` → `-work-api`), readable in a plain `ls`. */
-export function storeKey(projectDir: string): string {
-  return resolve(projectDir).replace(/[\\/:]/g, '-');
-}
-
-/** Where a repo's generated state lives: the repo itself, or its store entry. */
-function stateHome(projectDir: string): string {
-  const store = storeRoot();
-  return store ? join(store, storeKey(projectDir)) : projectDir;
-}
-
-/** The context dir a repo gets when nothing overrides it: `<repo>/graft`, or
- * `<store>/<key>/graft` under `GRAFT_STORE`. The one default every resolver
- * (`contextDirFor`, {@link resolveContextDir}) falls back to. */
-export function defaultContextDir(projectDir: string): string {
-  return join(stateHome(projectDir), 'graft');
-}
-
-/**
  * Where the pieces this module manages (the stats cache, the sync lock,
  * per-session state, the upkeep stamp) actually live when no caller-supplied
  * override is available. The Claude Code hooks, `sync-run`, the statusline,
@@ -72,13 +41,13 @@ export function defaultContextDir(projectDir: string): string {
  * `--dir` — unlike a direct CLI invocation, which threads one through
  * `contextDirFor` (`context/node-file.ts`). This mirrors that same override
  * precedence for those entry points: `GRAFT_DIR` wins over the default
- * ({@link defaultContextDir}), the same env var `resolveConfig` already honors
+ * (`mapDirFor`: `graft/`, `.trail/cache/`, or the `GRAFT_STORE` entry), the same env var `resolveConfig` already honors
  * for the `--deep` LLM path. A relative `GRAFT_DIR` resolves against
  * `projectDir` so it holds regardless of the caller's cwd.
  */
 export function resolveContextDir(projectDir: string): string {
   const override = process.env.GRAFT_DIR;
-  if (!override) return defaultContextDir(projectDir);
+  if (!override) return mapDirFor(projectDir);
   return isAbsolute(override) ? override : join(projectDir, override);
 }
 
@@ -102,11 +71,23 @@ export function readJson<T>(p: string): T | null {
  * open) accumulates one full-size file per attempt, and nothing in graft ever lists
  * `.cache/` to clean them up.
  */
-export function writeJsonAtomic(p: string, value: unknown, compact = false): void {
+export function writeJsonAtomic(p: string, value: unknown, compact = false, mode?: number): void {
   mkdirSync(dirname(p), { recursive: true });
-  const tmp = `${p}.${process.pid}.tmp`;
+  // A name no one can guess, opened new-only and never through a link: a link
+  // planted where the temp file goes is neither written through nor renamed
+  // into place (D85).
+  const tmp = `${p}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
   try {
-    writeFileSync(tmp, compact ? JSON.stringify(value) : JSON.stringify(value, null, 2));
+    // `mode` applies to the new file before it's renamed into place, so a
+    // secret is never readable by others even for a moment.
+    const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), mode ?? 0o666);
+    try {
+      if (mode !== undefined && process.platform !== 'win32') fchmodSync(fd, mode);
+      const buf = Buffer.from(compact ? JSON.stringify(value) : JSON.stringify(value, null, 2), 'utf8');
+      for (let off = 0; off < buf.length; ) off += writeSync(fd, buf, off, buf.length - off);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(tmp, p);
   } catch (e) {
     try { rmSync(tmp, { force: true }); } catch { /* nothing more we can do */ }
@@ -142,11 +123,6 @@ export interface BuildConfig {
    * though it has its own `.git`. Without it a repo root is never a workspace:
    * one stray clone parked in a tree must not change how that tree is indexed. */
   workspace?: boolean;
-  /** The Trail brain this repo's rules come from: the brain id and the token to
-   * read it with. Persisted here — in the git-ignored `.graft/` — rather than in
-   * `~/.graft/`, because a brain belongs to one repository and two checkouts on
-   * one machine must not share one. `undefined` clears it. */
-  brain?: { brainId: string; token: string; baseUrl?: string };
 }
 
 /** Local, Git-ignored repository configuration. Kept outside generated
@@ -161,6 +137,8 @@ export function buildConfigPath(d: string): string { return join(stateHome(d), B
  * A store keeps the config out of the repo, so there is nothing to ignore. */
 function ensureBuildConfigIgnored(d: string): void {
   if (storeRoot()) return;
+  const noGitignore = process.env.GRAFT_NO_GITIGNORE;
+  if (noGitignore && noGitignore !== '0' && noGitignore !== 'false') return;
   const path = join(d, '.gitignore');
   let current = '';
   try { current = readFileSync(path, 'utf8'); } catch { /* no .gitignore yet */ }
@@ -250,4 +228,8 @@ export function acquireLockIn(cache: string): boolean {
 }
 export function releaseLockIn(cache: string): void {
   try { rmSync(join(cache, LOCK_FILE)); } catch { /* already gone */ }
+}
+/** Whether someone holds the lock in `cache`: the file is there and not yet old enough to reclaim. */
+export function lockHeldIn(cache: string): boolean {
+  try { return Date.now() - statSync(join(cache, LOCK_FILE)).mtimeMs < LOCK_STALE_MS; } catch { return false; }
 }

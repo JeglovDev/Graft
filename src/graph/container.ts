@@ -22,7 +22,8 @@
  * fixtures whose true line numbers are known.
  */
 import { extractFile, mintId, type ExtractResult, type Language, type RawEdge } from "./extract.js";
-import { loadWasmLanguage, parseWasm, type TsNode } from "./generic.js";
+import { extractGeneric, fallbackLangOf, loadWasmLanguage, parseWasm, type TsNode } from "./generic.js";
+import { depthReady, warmDepthGrammars } from "./depth-parser.js";
 import { contentHash } from "../util/id.js";
 import type { NodeV1 } from "./types.js";
 
@@ -66,15 +67,16 @@ export function containerExtensions(): string[] {
 
 const loaded = new Map<string, unknown>();
 
-/** Warm the container grammars this repo needs. Same contract as
- * `warmGenericGrammars`: await once before the synchronous parse loop, and an
- * unavailable grammar is skipped rather than fatal (its files then extract to a
- * file node only, exactly as they do today). */
+/** Warm the container grammars this repo needs, and the depth grammar of each
+ * one's embedded language. Same contract as `warmGenericGrammars`: await once
+ * before the synchronous parse loop, and an unavailable grammar is skipped rather
+ * than fatal (its files then extract to a file node only, exactly as they do today). */
 export async function warmContainerGrammars(langNames: Iterable<string>): Promise<void> {
   for (const name of new Set(langNames)) {
     if (loaded.has(name)) continue;
     const row = CONTAINER_LANGS.find((l) => l.name === name);
     if (!row) continue;
+    await warmDepthGrammars([row.inner]);
     const language = await loadWasmLanguage(row.wasm);
     if (language) loaded.set(name, language);
   }
@@ -168,7 +170,11 @@ export function extractContainer(rel: string, source: string, lang: ContainerLan
 
       let inner: ExtractResult;
       try {
-        inner = extractFile(rel, script, lang.inner);
+        // No grammar for the embedded language (see depth-parser.ts): its breadth
+        // stand-in gives the block's symbols, warmed by the build like any other.
+        inner = depthReady(lang.inner)
+          ? extractFile(rel, script, lang.inner)
+          : extractGeneric(rel, script, fallbackLangOf(lang.inner).name);
       } catch {
         continue; // one bad block, not a bad build
       }

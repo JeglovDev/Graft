@@ -11,16 +11,17 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { contextDirFor } from "../src/context/node-file.js";
+import { mapDirFor } from "../src/context/map-dir.js";
 import { nearestGraftRoot } from "../src/graph/root.js";
 import { wiringPath } from "../src/graph/write.js";
+import { planRetract } from "../src/hosts/retract.js";
 import {
   buildConfigPath,
-  defaultContextDir,
   patchBuildConfig,
   resolveContextDir,
   storeKey,
@@ -49,7 +50,7 @@ test("storeKey turns the absolute repo path into one dash-separated name", () =>
 test("without GRAFT_STORE the graph stays at <repo>/graft", () => {
   const repo = tmpRepo("store-off");
   withEnv({ GRAFT_STORE: undefined, GRAFT_DIR: undefined }, () => {
-    assert.equal(defaultContextDir(repo), join(repo, "graft"));
+    assert.equal(mapDirFor(repo), join(repo, "graft"));
     assert.equal(contextDirFor(repo), join(repo, "graft"));
     assert.equal(buildConfigPath(repo), join(repo, ".graft", "config.json"));
   });
@@ -107,23 +108,71 @@ test("the ancestor walk finds a stored graph from a subdirectory", () => {
   });
 });
 
-test("graft build under GRAFT_STORE writes nothing into the checkout", () => {
+function buildInStore(flags: string[]): { repo: string; store: string } {
   const repo = tmpRepo("store-build");
   const store = tmpRepo("store");
   mkdirSync(join(repo, "src"));
   writeFileSync(join(repo, "src", "a.ts"), "export function a() { return b(); }\nexport function b() { return 1; }\n");
   const git = spawnSync("git", ["init", "-q"], { cwd: repo });
   assert.equal(git.status, 0, "git init failed");
+  // A clone parked inside the tree, the case `--follow-nested-repos` persists a choice for.
+  mkdirSync(join(repo, "nested"));
+  writeFileSync(join(repo, "nested", "n.ts"), "export const n = 1;\n");
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: join(repo, "nested") }).status, 0);
 
-  const res = spawnSync(process.execPath, ["--import", "tsx", "src/cli.ts", "build", repo], {
+  const env: NodeJS.ProcessEnv = { ...process.env, GRAFT_STORE: store, DO_NOT_TRACK: "1" };
+  delete env.GRAFT_DIR;
+  const res = spawnSync(process.execPath, ["--import", "tsx", "src/cli.ts", "build", repo, ...flags], {
     encoding: "utf8",
     timeout: 120_000,
-    env: { ...process.env, GRAFT_STORE: store, GRAFT_DIR: undefined, DO_NOT_TRACK: "1" },
+    env,
   });
   assert.equal(res.status, 0, `build failed:\n${res.stdout}\n${res.stderr}`);
+  return { repo, store };
+}
 
-  for (const name of ["graft", ".graft", ".gitignore", ".ignore"]) {
+const REPO_TRACES = ["graft", ".graft", ".gitignore", ".ignore", ".trail"];
+
+test("graft build under GRAFT_STORE writes nothing into the checkout", () => {
+  const { repo, store } = buildInStore([]);
+  for (const name of REPO_TRACES) {
     assert.equal(existsSync(join(repo, name)), false, `${name} appeared in the checkout`);
   }
   assert.ok(existsSync(wiringPath(join(store, storeKey(repo), "graft"))), "no wiring graph in the store");
+});
+
+test("a persisted build flag under GRAFT_STORE lands in the store, not in <repo>/.graft", () => {
+  const { repo, store } = buildInStore(["--follow-nested-repos"]);
+  for (const name of REPO_TRACES) {
+    assert.equal(existsSync(join(repo, name)), false, `${name} appeared in the checkout`);
+  }
+  const config = join(store, storeKey(repo), ".graft", "config.json");
+  assert.ok(existsSync(config), "the persisted choice is missing from the store");
+  assert.match(readFileSync(config, "utf8"), /"followNestedRepos": true/);
+});
+
+test("GRAFT_STORE wins over trail's .trail/cache and never moves an old graft/ into the repo", () => {
+  const repo = tmpRepo("store-trail");
+  const store = tmpRepo("store");
+  // A repo on trail (it has .trail/learnings/) that still holds a map in graft/.
+  mkdirSync(join(repo, ".trail", "learnings"), { recursive: true });
+  mkdirSync(join(repo, "graft"));
+  writeFileSync(join(repo, "graft", "INDEX.md"), "# old map\n");
+  withEnv({ GRAFT_STORE: store, GRAFT_DIR: undefined }, () => {
+    assert.equal(mapDirFor(repo), join(store, storeKey(repo), "graft"));
+    assert.equal(contextDirFor(repo), join(store, storeKey(repo), "graft"));
+  });
+  assert.equal(existsSync(join(repo, ".trail", "cache")), false, "the old map was moved into .trail/cache");
+  assert.ok(existsSync(join(repo, "graft", "INDEX.md")), "the old map was touched");
+});
+
+test("retract under GRAFT_STORE targets the repo's store entry", () => {
+  const repo = tmpRepo("store-retract");
+  const store = tmpRepo("store");
+  const plan = withEnv({ GRAFT_STORE: store, GRAFT_DIR: undefined }, () =>
+    planRetract(repo, { home: tmpRepo("store-retract-home"), global: false }),
+  );
+  const caches = plan.filter((t) => t.what === "local graph cache").map((t) => t.path);
+  assert.ok(caches.includes(join(store, storeKey(repo), "graft")), `store entry not targeted: ${caches.join(", ")}`);
+  assert.ok(!caches.includes(join(repo, "graft")));
 });

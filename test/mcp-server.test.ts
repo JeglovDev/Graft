@@ -8,7 +8,12 @@ import { once } from 'node:events';
 import { buildGraph } from '../src/graph/build.js';
 
 async function rpc(messages: object[], dir: string, expected: number): Promise<any[]> {
-  const child = spawn(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'mcp', dir], { stdio: ['pipe', 'pipe', 'pipe'] });
+  // A fresh HOME: the server's boot upkeep reads the machine's own wiring and
+  // update cache, and its lines ride in `instructions`, so the real HOME would
+  // make the length test depend on whatever this machine has installed.
+  const home = mkdtempSync(join(tmpdir(), 'graft-mcpsrv-home-'));
+  const { TRAIL_HOME: _t, GRAFT_HOME: _g, ...env } = process.env;
+  const child = spawn(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'mcp', dir], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...env, HOME: home } });
   const responses: any[] = [];
   let buf = '';
   child.stdout.on('data', (d) => {

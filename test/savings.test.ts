@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { savingsFor, savingsLine, withSavings, toTokens, setInputRate } from '../src/context/savings.js';
 import { hasSavingsTally } from '../src/claude/tally.js';
+import { formatOrientation, formatRetrieval, type AskJson } from '../src/claude/format.js';
 import type { GraphV1, NodeV1 } from '../src/graph/types.js';
 
 function fileNode(path: string, chars?: number): NodeV1 {
@@ -90,6 +91,27 @@ test('GRAFT_NO_SAVINGS drops the estimate and the report-it nudge entirely', () 
     if (prev === undefined) delete process.env.GRAFT_NO_SAVINGS; else process.env.GRAFT_NO_SAVINGS = prev;
   }
   assert.notEqual(savingsLine('body', { files: 2, baselineChars: 8000 }), '', 'unset means the default, on');
+});
+
+test('GRAFT_NO_SAVINGS also drops the injected-pack estimate and the session-start tally instruction', () => {
+  const ask: AskJson = {
+    query: 'q', mode: 'lexical',
+    hits: [{ kind: 'symbol', title: 'a', pointer: 'src/a.ts:L1-L1', snippet: 'function a()', score: 1 }],
+    saved: { files: 1, baselineChars: 40_000 },
+  };
+  const TALLY_ASK = /close your reply with a one-line tally/;
+  assert.match(formatRetrieval(ask)!, /tokens saved ≈/, 'on by default');
+  assert.match(formatOrientation('# repo map\n'), TALLY_ASK, 'on by default');
+  const prev = process.env.GRAFT_NO_SAVINGS;
+  process.env.GRAFT_NO_SAVINGS = '1';
+  try {
+    assert.doesNotMatch(formatRetrieval(ask)!, /tokens saved/);
+    const orientation = formatOrientation('# repo map\n');
+    assert.doesNotMatch(orientation, TALLY_ASK);
+    assert.doesNotMatch(orientation, /tokens saved/);
+  } finally {
+    if (prev === undefined) delete process.env.GRAFT_NO_SAVINGS; else process.env.GRAFT_NO_SAVINGS = prev;
+  }
 });
 
 test('the turn nudge carries no dollar figure until a rate is set', () => {

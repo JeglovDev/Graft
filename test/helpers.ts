@@ -7,10 +7,10 @@
  * than being hand-rolled per file because both carry a platform trap that is
  * invisible until CI runs on Windows: see {@link tmpRepo} and {@link homeEnv}.
  */
-import { mkdtempSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync } from "node:fs";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type { Summarizer, Synthesizer, SynthNode, SynthLink, FileSummary } from "../src/index.js";
 
 /**
@@ -59,6 +59,20 @@ export function chmodDenialUnavailable(): string | null {
     return "chmod does not deny access on Windows — the mode maps onto the read-only attribute";
   }
   if (process.getuid?.() === 0) return "running as root, which reads and writes regardless of mode";
+  return null;
+}
+
+/**
+ * The shell Claude Code runs a hook command in: the platform's own (`sh`) off Windows, Git Bash on Windows, which
+ * Claude Code needs there. Not `cmd.exe`, Node's `shell: true` on Windows: it can't expand the
+ * `${CLAUDE_PROJECT_DIR:-.}` the repo's hook commands start with, so a test run there proves nothing.
+ * Null on a Windows machine with no Git Bash next to its git.
+ */
+export function hookShell(): string | true | null {
+  if (process.platform !== "win32") return true;
+  const roots = (process.env.PATH ?? "").split(delimiter).filter(Boolean).filter((d) => existsSync(join(d, "git.exe"))).map((d) => join(d, ".."));
+  roots.push(join(process.env.ProgramFiles ?? "C:\\Program Files", "Git"));
+  for (const r of roots) for (const bash of [join(r, "bin", "bash.exe"), join(r, "..", "bin", "bash.exe")]) if (existsSync(bash)) return bash;
   return null;
 }
 
