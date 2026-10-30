@@ -47,6 +47,8 @@
   calls it and `--depth 2` walks on to the repos that import that SDK class. A
   route served by more than one repo, or by two handlers, is left unlinked;
   `map` at the workspace root counts the links and lists those ambiguous requests.
+  A route whose action is a closure (bare, an arrow function, under `uses` or
+  among the action array's entries) is served by that closure's node.
 - **Workspace queries link method calls into another repo's methods (PHP,
   static).** A call whose receiver types without running anything - a class
   (`X::m()`, `$x::m()`), `new X`, `$this`, a typed or promoted property, a typed

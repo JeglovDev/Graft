@@ -246,6 +246,39 @@ test("a route two other repos declare is ambiguous and gets no link; the most sp
   rmSync(dup, { recursive: true, force: true });
 });
 
+test("a closure route links to its closure, bare, in an action array or as an arrow function", async () => {
+  const p = await built({
+    "report-service": {
+      "composer.json": JSON.stringify({ autoload: { "psr-4": { "Report\\": "app/" } } }),
+      "routes/web.php":
+        "<?php\n\n$router->post('/getRtp', function ($request) {\n    return [];\n});\n" +
+        "$router->get('/getCart', [\n    'middleware' => 'auth',\n    function () {\n        return [];\n    },\n]);\n" +
+        "$router->get('/getUses', ['uses' => function () {\n    return [];\n}]);\n" +
+        "$router->get('/getArrow', fn () => []);\n",
+    },
+    "report-client": {
+      "composer.json": JSON.stringify({ autoload: { "psr-4": { "Client\\": "src/" } } }),
+      "src/Reports.php":
+        "<?php\nnamespace Client;\n\nclass Reports\n{\n" +
+        "    public function rtp(): void\n    {\n        \\Http::post($this->base . '/getRtp');\n    }\n\n" +
+        "    public function cart(): void\n    {\n        \\Http::get($this->base . '/getCart');\n    }\n\n" +
+        "    public function uses(): void\n    {\n        \\Http::get($this->base . '/getUses');\n    }\n\n" +
+        "    public function arrow(): void\n    {\n        \\Http::get($this->base . '/getArrow');\n    }\n}\n",
+    },
+  });
+  const graphs = loadWorkspaceGraphs(p).loaded;
+  const service = graphs.find((c) => c.child === "report-service")!.graph;
+  const startOf = (id: string | null | undefined) => service.nodes.find((n) => n.id === id)?.span.split("-")[0];
+  const { matches } = matchHttp(graphs.map((c) => ({ child: c.child, http: c.graph.http })));
+  const target = (path: string) => matches.find((m) => m.fromChild === "report-client" && m.call.path === path)?.endpoint.handler;
+  assert.equal(startOf(target("getRtp")), "L3", "bare closure argument");
+  assert.equal(startOf(target("getCart")), "L8", "closure among the action array's entries");
+  assert.equal(startOf(target("getUses")), "L12", "closure under 'uses'");
+  assert.equal(startOf(target("getArrow")), "L15", "arrow function");
+  assert.equal(httpStats(p, graphs).noHandler, 0);
+  rmSync(p, { recursive: true, force: true });
+});
+
 test("find_all counts http callers in a handler's in-degree", async () => {
   const p = await built();
   const r = federateGrep(p, undefined, "function get\\(", {});

@@ -48,6 +48,8 @@ export interface RouteFact {
   /** In-file group prefixes joined with the route's own path, not yet normalized. */
   path: string;
   handler: HandlerRef | null;
+  /** First line of the closure that serves the route, when the action is one. */
+  closureLine?: number;
   /** Namespace of the in-file groups around the route, relative to its mount. */
   namespace: string | null;
   line: number;
@@ -276,8 +278,11 @@ export function assembleHttp(
   const methodsByOwner = new Map<string, NodeV1[]>();
   const typesByName = new Map<string, NodeV1[]>();
   const nameOf = new Map<string, string>();
+  /** Closure nodes by `file:first line`, for routes whose action is a closure. */
+  const closureAt = new Map<string, string>();
   for (const n of nodes) {
     nameOf.set(n.id, n.name);
+    if (n.kind === "function" && n.name === "{closure}") closureAt.set(`${n.path}:${n.span.slice(1, n.span.indexOf("-"))}`, n.id);
     if (n.kind === "method" && n.owner) {
       const k = `${n.owner}\0${n.name}`;
       const arr = methodsByOwner.get(k);
@@ -328,6 +333,8 @@ export function assembleHttp(
             ? r.handler.cls
             : (joinNamespace(joinNamespace(ctx.namespace, r.namespace), r.handler.cls) ?? r.handler.cls);
           handler = handlerNode(fqcn, r.handler.method, methodsByOwner, typesByName, autoload);
+        } else if (r.closureLine !== undefined) {
+          handler = closureAt.get(`${file}:${r.closureLine}`) ?? null;
         }
         const path = joinRoutePath(ctx.prefix, r.path);
         const methods = [...new Set(r.methods)].sort();

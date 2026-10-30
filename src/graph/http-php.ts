@@ -267,6 +267,17 @@ function closureOf(n: SyntaxNode | undefined): SyntaxNode | null {
   return n && (n.type === "anonymous_function" || n.type === "arrow_function") ? n : null;
 }
 
+/** The closure a route action is: the argument itself, its `uses`, or the one
+ * closure among an action array's entries (`['middleware' => …, function () {…}]`). */
+function actionClosure(n: SyntaxNode | undefined): SyntaxNode | null {
+  const direct = closureOf(n);
+  if (direct || !n || n.type !== "array_creation_expression") return direct;
+  const uses = closureOf(arrayKey(n, "uses") ?? undefined);
+  if (uses) return uses;
+  const plain = arrayEntries(n).filter((e) => e.key === null && closureOf(e.value));
+  return plain.length === 1 ? plain[0]!.value : null;
+}
+
 function closureParams(fn: SyntaxNode): string[] {
   const params = fn.childForFieldName("parameters") ?? fn.namedChildren.find((c) => c.type === "formal_parameters");
   return (params?.namedChildren ?? [])
@@ -360,12 +371,20 @@ class RouteWalker {
   }
 
   private route(name: string, call: SyntaxNode, args: SyntaxNode[], ctx: RouteCtx): boolean {
-    const push = (methods: string[], path: string | null, handler: HandlerRef | null) => {
+    const push = (methods: string[], path: string | null, handler: HandlerRef | null, action?: SyntaxNode) => {
       if (path === null) return;
-      this.routes.push({ methods, path: joinPrefix(ctx.prefix, path), handler, namespace: ctx.namespace, line: lineOf(call) });
+      const closure = handler ? null : actionClosure(action);
+      this.routes.push({
+        methods,
+        path: joinPrefix(ctx.prefix, path),
+        handler,
+        ...(closure ? { closureLine: lineOf(closure) } : {}),
+        namespace: ctx.namespace,
+        line: lineOf(call),
+      });
     };
     if (ROUTE_VERBS.has(name)) {
-      push([name === "any" ? "ANY" : name.toUpperCase()], this.str(args[0]), handlerOf(args[1], ctx, this.file));
+      push([name === "any" ? "ANY" : name.toUpperCase()], this.str(args[0]), handlerOf(args[1], ctx, this.file), args[1]);
       return true;
     }
     if (name === "match" || name === "addroute") {
@@ -374,7 +393,7 @@ class RouteWalker {
         m?.type === "array_creation_expression"
           ? arrayEntries(m).map((e) => this.str(e.value)?.toUpperCase()).filter((v): v is string => !!v && !v.includes(DYN))
           : [this.str(m)?.toUpperCase()].filter((v): v is string => !!v && !v.includes(DYN));
-      push(methods.length ? methods : ["ANY"], this.str(args[1]), handlerOf(args[2], ctx, this.file));
+      push(methods.length ? methods : ["ANY"], this.str(args[1]), handlerOf(args[2], ctx, this.file), args[2]);
       return true;
     }
     if (name === "resource" || name === "apiresource") {
