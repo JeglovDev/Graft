@@ -17,6 +17,7 @@ import { toPosixPath } from "../util/paths.js";
 import type { EdgeV1, Kind, NodeV1, Relation } from "./types.js";
 import { languageOf, type RawEdge } from "./extract.js";
 import { genericLangOf } from "./generic.js";
+import { psr4Paths, underOtherRoot, type PhpAutoload } from "./composer.js";
 
 const IMPORT_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py"];
 /** C/C++ source + header extensions, for resolving `#include` targets. */
@@ -96,6 +97,10 @@ export interface ResolveOptions {
    * (`example.com/app/pkg/util`) to the in-repo directory they name, relative to the
    * owning module's `go.mod` location. Empty/absent → Go imports stay external strings. */
   goModules?: GoModule[];
+  /** The repo's Composer PSR-4 map. A PHP `use` then resolves to the exact file
+   * autoload would load, and a class it cannot load from here stays an external FQCN
+   * rather than being suffix-matched onto a same-named local file. */
+  phpAutoload?: PhpAutoload;
 }
 
 export function resolveEdges(
@@ -235,7 +240,7 @@ export function resolveEdges(
               : e.file.endsWith(".rs")
                 ? resolveRustUse(e.specifier, e.file, byId, rustCrateRoots)
                 : e.file.endsWith(".php")
-                  ? resolvePhpUse(e.specifier, phpFilesBySuffix)
+                  ? resolvePhpUse(e.specifier, phpFilesBySuffix, opts.phpAutoload, byId)
                   : e.file.endsWith(".py")
                     ? resolvePythonImport(e.specifier, e.file, byId, pythonFilesByModule)
                     : e.file.endsWith(".gleam")
@@ -255,7 +260,7 @@ export function resolveEdges(
         // it came from and the exported name. Resolve inside that file only, so a
         // same-named symbol elsewhere in the repo cannot become a false edge.
         const targetFile = e.file.endsWith(".php")
-          ? resolvePhpUse(e.specifier, phpFilesBySuffix)
+          ? resolvePhpUse(e.specifier, phpFilesBySuffix, opts.phpAutoload, byId)
           : e.file.endsWith(".gleam")
             ? resolveGleamImport(e.specifier, gleamFilesBySuffix)
             : resolveImport(e.specifier, e.file, byId);
@@ -657,13 +662,29 @@ function resolveCInclude(
  * to a `<Class>.php` file, so we match the longest namespace-tail suffix that names exactly
  * one file: `App/Models/User.php`, then `Models/User.php`, then `User.php`. The longest
  * unique match wins; an ambiguous tail or a vendor/out-of-repo class stays the raw name.
+ * When the repo's `composer.json` declares PSR-4 roots, the exact PSR-4 file is tried
+ * first and the suffix guess is confined to its `classmap`/`psr-0` roots, if any.
  */
-function resolvePhpUse(fqn: string, bySuffix: Map<string, string[]>): string {
+function resolvePhpUse(
+  fqn: string,
+  bySuffix: Map<string, string[]>,
+  autoload: PhpAutoload | undefined,
+  byId: Map<string, NodeV1>,
+): string {
+  // Outside the PSR-4 file, the class can only come from a classmap/psr-0 root here;
+  // anywhere else it is a dependency's, and a suffix guess would bind
+  // `Sdk\Exceptions\ApiException` to the app's own ApiException.
+  let inRoots = (_: string) => true;
+  if (autoload?.psr4.length) {
+    for (const path of psr4Paths(fqn, autoload.psr4)) if (byId.get(path)?.kind === "file") return path;
+    if (autoload.otherRoots.length === 0) return fqn;
+    inRoots = (id) => underOtherRoot(id, autoload);
+  }
   const parts = fqn.split("\\").filter(Boolean);
   if (parts.length === 0) return fqn;
   for (let i = 0; i < parts.length; i++) {
     const suffix = `${parts.slice(i).join("/")}.php`;
-    const hits = bySuffix.get(suffix);
+    const hits = bySuffix.get(suffix)?.filter(inRoots);
     if (hits && hits.length === 1) return hits[0];
     if (hits && hits.length > 1) break; // ambiguous at the most specific level — do not guess
   }

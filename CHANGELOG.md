@@ -19,6 +19,17 @@
   workspace of the clones inside it, for checkouts that git-ignore a folder of
   separate repositories. Workspace discovery also finds clones one level down
   in plain grouping folders (`services/api`).
+- **Workspace queries see edges between repos (PHP, Composer PSR-4).** A
+  `use Vendor\Sdk\Client` that one repo leaves unresolved is looked up in the
+  `autoload.psr-4` maps of the other repos, so `callers Client` at the workspace
+  root lists the services that import or extend it, labeled `<repo>/path`;
+  `--direction out` shows the SDK class instead of a dangling FQCN, `--depth`
+  walks on inside the other repo, a FQCN query (`Vendor\Sdk\Client`) works, and
+  `find_all` counts these in-edges. Inside one repo, a `use` now resolves to the
+  exact file its own PSR-4 map names, and a class outside those namespaces stays
+  external instead of being matched to a same-named local file (a suffix guess
+  is left only for `classmap`/`psr-0` dirs). A group use
+  (`use App\Models\{User, Post}`) keeps its prefix instead of importing a bare `User`.
 
 - **`GRAFT_NO_SAVINGS=1` drops the savings footer** from every tool output:
   the `[graft] tokens saved ≈ N` estimate and the nudge asking the agent to end

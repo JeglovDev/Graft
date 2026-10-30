@@ -14,7 +14,8 @@
  * are combined by score (see `ask/fuse.ts`). Separate child repositories have
  * no such shared scale, which is exactly the case rank fusion is for.
  * `grep`/`map`/`check`/`callers` run per child and merge, always labeled
- * `<child>/`.
+ * `<child>/`. `callers` and `grep` also see the edges BETWEEN children, derived
+ * from the children's package manifests (`workspace-links.ts`).
  *
  * This module owns the pure/core pieces (the format, its readers/writers, graph
  * loading, and the federated command bodies that return renderable data). The
@@ -34,9 +35,11 @@ import {
   hitLine,
   looseNoteFor,
 } from "./traverse-cli.js";
-import { edgeWalk, resolveSymbol, type Direction } from "./traverse.js";
+import { edgeWalk, resolveSymbol, type Direction, type EdgeHit } from "./traverse.js";
 import { wiringPath } from "./write.js";
-import type { GraphV1 } from "./types.js";
+import type { GraphV1, NodeV1 } from "./types.js";
+import { isPhpFqcn } from "./composer.js";
+import { crossHits, federatedWalk, linkKey, resolveFqcn, workspaceLinks } from "./workspace-links.js";
 import { readWorkspaceOptIn } from "../util/state.js";
 import {
   ask,
@@ -562,7 +565,8 @@ export function federateAsk(
 
 /** Merge every child's `GrepResult` into one, prefixing group paths with the
  * child dir and re-sorting by coupling (inDegree desc, path asc) across repos.
- * In-degree stays each child's own — it comes from that child's graph. */
+ * In-degree is each child's own plus the cross-repo links landing on the symbol
+ * (`workspace-links.ts`). */
 export function federateGrep(
   root: string,
   override: string | undefined,
@@ -570,6 +574,7 @@ export function federateGrep(
   opts: { ignoreCase?: boolean; fixed?: boolean } = {},
 ): { result: GrepResult; coverage: string } {
   const wg = loadWorkspaceGraphs(root, override);
+  const links = workspaceLinks(root, wg.loaded);
   const groups: GrepGroup[] = [];
   let filesSearched = 0;
   let totalHits = 0;
@@ -591,8 +596,11 @@ export function federateGrep(
       savedChars += r.saved.baselineChars;
     }
     for (const g of r.groups) {
+      // Coupling counts what other repos point at the symbol too.
+      const cross = g.symbol ? (links.into.get(linkKey(child, g.symbol.id))?.length ?? 0) : 0;
       groups.push({
         ...g,
+        inDegree: g.inDegree + cross,
         path: `${child}/${g.path}`,
         symbol: g.symbol ? { ...g.symbol, path: `${child}/${g.symbol.path}` } : null,
       });
@@ -670,13 +678,29 @@ export function federateCallers(
   const depth = opts.depth && opts.depth >= 1 ? Math.floor(opts.depth) : 1;
   const showDepth = depth > 1;
 
+  const links = workspaceLinks(root, wg.loaded);
+  const graphs = new Map(wg.loaded.map((c) => [c.child, c.graph]));
+  // A PHP FQCN names one class through the children's PSR-4 maps; the bare
+  // resolver would only ever see its last segment.
+  const fqcn = isPhpFqcn(symbol);
+  const byFqcn = fqcn ? resolveFqcn(root, wg.loaded, symbol) : [];
+  const query = fqcn && byFqcn.length === 0 ? symbol.slice(symbol.lastIndexOf("\\") + 1) : symbol;
+  const walk = (child: string, graph: GraphV1, m: NodeV1): EdgeHit[] => {
+    if (depth > 1) return federatedWalk(graphs, links, child, m, direction, depth);
+    const cross = crossHits(graphs, links, child, m, direction);
+    const local = edgeWalk(graph, m, direction, depth).filter((h) => h.node || !cross.replaces.has(h.id));
+    return [...local, ...cross.hits];
+  };
+
   const blocks: string[] = [];
   let found = false;
   for (const { child, graph } of wg.loaded) {
-    const matches = resolveSymbol(graph, symbol, opts.in ? { in: opts.in } : {});
+    const matches = byFqcn.length
+      ? byFqcn.filter((f) => f.child === child).map((f) => f.node)
+      : resolveSymbol(graph, query, opts.in ? { in: opts.in } : {});
     if (matches.length === 0) continue;
     found = true;
-    const results = matches.map((m) => ({ symbol: m, hits: edgeWalk(graph, m, direction, depth) }));
+    const results = matches.map((m) => ({ symbol: m, hits: walk(child, graph, m) }));
     const lines = [`## ${child}/`];
     for (const { symbol: sym, hits } of results) {
       lines.push(headerOf(sym));

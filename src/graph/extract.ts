@@ -1007,7 +1007,8 @@ function phpUseClauseBinding(
   let fqn: string;
   let importedName: string;
   if (qualified) {
-    fqn = qualified.text.replace(/^\\/, "");
+    const tail = qualified.text.replace(/^\\/, "");
+    fqn = prefix ? `${prefix}\\${tail}` : tail;
     importedName = fqn.replace(/^.*\\/, "");
   } else if (names[0]) {
     importedName = names[0].text;
@@ -2580,7 +2581,13 @@ function importSpecifier(node: SyntaxNode, lang: Language): string | null {
   if (lang === "php") {
     // namespace_use_clause → its `qualified_name`/`name`, e.g. `App\Models\Animal`.
     const q = node.namedChildren.find((c) => c.type === "qualified_name" || c.type === "name");
-    return q ? q.text.replace(/^\\/, "") : null;
+    if (!q) return null;
+    // In a group (`use App\Models\{User, Post};`) the clause holds only the tail;
+    // without the group's prefix the specifier is a bare `User`.
+    const group = node.parent?.type === "namespace_use_group" ? node.parent.parent : null;
+    const prefix = group?.namedChildren.find((c) => c.type === "namespace_name")?.text.replace(/^\\|\\$/g, "");
+    const tail = q.text.replace(/^\\/, "");
+    return prefix ? `${prefix}\\${tail}` : tail;
   }
   if (lang === "python") {
     const m =

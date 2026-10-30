@@ -36,6 +36,7 @@ import { writeFingerprint } from "./fingerprint.js";
 import { seedGraph, type SeedResult } from "./seed.js";
 import { filterByOnlyDirs, listSourceStats } from "./source-files.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
+import { readComposerAutoload, type PhpAutoload } from "./composer.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
 import { writeCards, writeIndex, writeCovers, type CardStats } from "./cards.js";
@@ -209,6 +210,15 @@ function readGoModules(root: string, repoFiles: string[]): GoModule[] {
   return mods;
 }
 
+/** The repo's Composer PSR-4 map, from every `composer.json` in the same enumeration
+ * (a package in a subdirectory maps its namespaces under that subdirectory). */
+function readPhpAutoload(root: string, repoFiles: string[]): PhpAutoload {
+  const files = repoFiles
+    .filter((f) => basename(f) === "composer.json")
+    .map((abs) => ({ abs, dir: relPosix(root, dirname(abs)) }));
+  return readComposerAutoload(files);
+}
+
 export async function buildGraph(
   dir: string,
   opts: GraphBuildOptions = {},
@@ -354,7 +364,10 @@ export async function buildGraph(
     files: entries,
   });
 
-  const edges = resolveEdges(nodes, rawEdges, { goModules: readGoModules(root, repoFiles) });
+  const edges = resolveEdges(nodes, rawEdges, {
+    goModules: readGoModules(root, repoFiles),
+    phpAutoload: readPhpAutoload(root, repoFiles),
+  });
 
   // Guard 5 (minimum-substance): node counts aren't known until nodes are
   // assembled, so the merge-tiny-scopes-into-root guard runs here.
