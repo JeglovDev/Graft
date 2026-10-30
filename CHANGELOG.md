@@ -36,6 +36,17 @@
   external instead of being matched to a same-named local file (a suffix guess
   is left only for `classmap`/`psr-0` dirs). A group use
   (`use App\Models\{User, Post}`) keeps its prefix instead of importing a bare `User`.
+- **Workspace queries follow HTTP requests to the route that serves them (PHP,
+  Laravel/Lumen).** The build records each repo's routes (`Route::`, `$router->`,
+  nested `group` prefixes and namespaces, mounts from `bootstrap/app.php`,
+  `RouteServiceProvider` and `withRouting`) and the requests its methods send
+  with a literal path, also through the repo's own wrappers (`$this->request->post('/x')`
+  → `ApiRequest::post` → Guzzle `request`). At the workspace root a request is
+  linked, relation `http`, to the handler of the one other repo whose route fits
+  it, so `callers CurrencyController.getExchangeRates` lists the SDK method that
+  calls it and `--depth 2` walks on to the repos that import that SDK class. A
+  route served by more than one repo, or by two handlers, is left unlinked;
+  `map` at the workspace root counts the links and lists those ambiguous requests.
 
 - **`GRAFT_NO_SAVINGS=1` drops the savings footer** from every tool output:
   the `[graft] tokens saved ≈ N` estimate and the nudge asking the agent to end

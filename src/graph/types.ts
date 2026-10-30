@@ -98,7 +98,8 @@ export type Relation =
   | "imports" // file → module
   | "references" // symbol → symbol it names but doesn't call
   | "implements" // TS: class → interface
-  | "extends"; // class → base class
+  | "extends" // class → base class
+  | "http"; // client method → route handler in another repo; workspace links only, never a graph edge
 
 export interface EdgeV1 {
   source: string; // node id
@@ -117,6 +118,31 @@ export interface ScopeV1 {
   markers: string[];
 }
 
+/** A route the repo serves. `path` is `/`-free at both ends, parameters are `{}`
+ * (`{?}` when optional); `handler` is the method node that serves it, null for a
+ * closure or a class the repo does not define. See `http.ts`. */
+export interface HttpEndpointV1 {
+  methods: string[]; // upper-case verbs, or ["ANY"]
+  path: string;
+  handler: string | null;
+  file: string;
+  line: number;
+}
+
+/** A request the repo sends: `source` is the method that sends it, `method` the
+ * verb when it is known statically. */
+export interface HttpCallV1 {
+  source: string;
+  method: string | null;
+  path: string;
+  line: number;
+}
+
+export interface HttpFactsV1 {
+  endpoints: HttpEndpointV1[];
+  calls: HttpCallV1[];
+}
+
 export interface GraphV1 {
   meta: {
     version: 1;
@@ -129,4 +155,7 @@ export interface GraphV1 {
   };
   nodes: NodeV1[];
   edges: EdgeV1[];
+  /** HTTP routes and client calls, for links between the repos of a workspace.
+   * Absent when the repo has neither, and on graphs built before this field. */
+  http?: HttpFactsV1;
 }

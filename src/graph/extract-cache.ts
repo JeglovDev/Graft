@@ -30,6 +30,7 @@ import { dirname, extname, join } from "node:path";
 import { CACHE_DIR } from "../context/node-file.js";
 import { readJson, writeJsonAtomic } from "../util/state.js";
 import type { RawEdge } from "./extract.js";
+import type { FileHttpFacts } from "./http.js";
 import type { NodeV1 } from "./types.js";
 
 /** Bump when the on-disk shape below changes. */
@@ -43,6 +44,8 @@ export interface ExtractEntry {
   hash: string;
   nodes: NodeV1[];
   rawEdges: RawEdge[];
+  /** The file's HTTP facts (`http.ts`), when it has any. */
+  http?: FileHttpFacts;
   /** Set when this file couldn't be read or parsed. The entry exists anyway so the
    * freshness probe doesn't flag the file as new on every query; replaying it
    * re-reports the same error and contributes no nodes, exactly as a cold build

@@ -39,7 +39,7 @@ import { edgeWalk, resolveSymbol, type Direction, type EdgeHit } from "./travers
 import { wiringPath } from "./write.js";
 import type { GraphV1, NodeV1 } from "./types.js";
 import { isPhpFqcn } from "./composer.js";
-import { crossHits, federatedWalk, linkKey, resolveFqcn, workspaceLinks } from "./workspace-links.js";
+import { crossHits, federatedWalk, httpStats, linkKey, resolveFqcn, workspaceLinks } from "./workspace-links.js";
 import { readWorkspaceOptIn } from "../util/state.js";
 import {
   ask,
@@ -631,9 +631,32 @@ export function federateMap(
   });
   const head = `workspace map — ${wg.loaded.length} repo(s)`;
   const parts = [head, "", sections.join("\n\n")];
+  const links = linksNote(root, wg.loaded);
+  if (links) parts.push("", links);
   const cov = coverageNote(wg);
   if (cov) parts.push("", cov);
   return parts.join("\n") + "\n";
+}
+
+const AMBIGUOUS_SHOWN = 5;
+
+/** What the edges between repos amount to, and the HTTP requests that found no
+ * single handler. Null when the workspace has neither kind. */
+function linksNote(root: string, loaded: LoadedChild[]): string | null {
+  const { links } = workspaceLinks(root, loaded);
+  const s = httpStats(root, loaded);
+  if (links.length === 0 && s.calls === 0) return null;
+  const http = links.filter((l) => l.relation === "http").length;
+  const lines = [
+    `links between repos: ${links.length - http} by Composer use, ${http} by HTTP route ` +
+      `(of ${s.calls} requests: ${s.ambiguous.length} ambiguous, ${s.verbMismatch} verb mismatch, ` +
+      `${s.noHandler} closure or unresolved handler, ${s.unmatched} no route in another repo)`,
+  ];
+  for (const a of s.ambiguous.slice(0, AMBIGUOUS_SHOWN)) {
+    lines.push(`  ambiguous: ${a.call.method ?? "ANY"} /${a.call.path} from ${a.fromChild}/${a.call.source} → ${a.candidates.join(", ")}`);
+  }
+  if (s.ambiguous.length > AMBIGUOUS_SHOWN) lines.push(`  … ${s.ambiguous.length - AMBIGUOUS_SHOWN} more ambiguous`);
+  return lines.join("\n");
 }
 
 /** Per-child drift status. `ok` is false when any BUILT child is stale — an

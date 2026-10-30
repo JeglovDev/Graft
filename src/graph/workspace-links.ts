@@ -11,11 +11,15 @@
  * pre-query refresh) can never go stale the way a persisted links file would.
  * On a 37-repo workspace it costs ~90 ms cold, next to ~350 ms to load the graphs.
  *
- * PHP/Composer PSR-4 only for now; the link shape is language-neutral.
+ * Two kinds, both PHP for now; the link shape is language-neutral:
+ *   - Composer PSR-4: an FQCN one child leaves unresolved, to the class another defines;
+ *   - HTTP (`http.ts`): a client method sending a request, to the route handler of the
+ *     one other child that serves its path, relation `http`.
  */
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { isPhpFqcn, psr4Paths, readComposerAutoload, type PhpAutoload } from "./composer.js";
+import { matchHttp, type HttpMatchStats } from "./http.js";
 import { WALK_RELATIONS } from "./relations.js";
 import { scopesOfGraph } from "./scopes.js";
 import type { Direction, EdgeHit } from "./traverse.js";
@@ -141,11 +145,32 @@ export function computeLinks(root: string, children: Child[]): CrossLink[] {
   return links;
 }
 
-let memo: { graphs: GraphV1[]; stamp: string; index: LinkIndex } | null = null;
+/** HTTP links: a client call in one child to the route handler of the one other
+ * child that serves its path (`http.ts`). `rawTarget` is the request itself, which
+ * no edge of the source graph targets, so a walk out replaces nothing. */
+function httpLinks(children: Child[]): { links: CrossLink[]; stats: HttpMatchStats } {
+  const { matches, stats } = matchHttp(children.map((c) => ({ child: c.child, http: c.graph.http })));
+  const links = matches.map((m) => ({
+    fromChild: m.fromChild,
+    sourceId: m.call.source,
+    relation: "http" as const,
+    rawTarget: `${m.call.method ?? "ANY"} /${m.call.path}`,
+    toChild: m.toChild,
+    targetId: m.endpoint.handler!,
+  }));
+  return { links, stats };
+}
 
-/** The workspace's link index, recomputed only when a child graph object or a
- * `composer.json` changed since the last call in this process. */
-export function workspaceLinks(root: string, children: Child[]): LinkIndex {
+interface Memo {
+  graphs: GraphV1[];
+  stamp: string;
+  index: LinkIndex;
+  http: HttpMatchStats;
+}
+
+let memo: Memo | null = null;
+
+function memoized(root: string, children: Child[]): Memo {
   const stamp =
     root + "\n" + children.map((c) => `${c.child}:${composerFiles(root, c).map((f) => mtimeOf(f.abs)).join(",")}`).join("\n");
   if (
@@ -154,9 +179,10 @@ export function workspaceLinks(root: string, children: Child[]): LinkIndex {
     memo.graphs.length === children.length &&
     memo.graphs.every((g, i) => g === children[i]!.graph)
   ) {
-    return memo.index;
+    return memo;
   }
-  const links = computeLinks(root, children);
+  const http = httpLinks(children);
+  const links = [...computeLinks(root, children), ...http.links];
   const into = new Map<string, CrossLink[]>();
   const outOf = new Map<string, CrossLink[]>();
   const push = (m: Map<string, CrossLink[]>, k: string, l: CrossLink) => {
@@ -168,9 +194,20 @@ export function workspaceLinks(root: string, children: Child[]): LinkIndex {
     push(into, linkKey(l.toChild, l.targetId), l);
     push(outOf, linkKey(l.fromChild, l.sourceId), l);
   }
-  const index = { links, into, outOf };
-  memo = { graphs: children.map((c) => c.graph), stamp, index };
-  return index;
+  memo = { graphs: children.map((c) => c.graph), stamp, index: { links, into, outOf }, http: http.stats };
+  return memo;
+}
+
+/** The workspace's link index (Composer and HTTP), recomputed only when a child
+ * graph object or a `composer.json` changed since the last call in this process. */
+export function workspaceLinks(root: string, children: Child[]): LinkIndex {
+  return memoized(root, children).index;
+}
+
+/** How the workspace's HTTP client calls matched: linked, ambiguous between repos
+ * (listed), verb mismatch, handler unresolved, unmatched. */
+export function httpStats(root: string, children: Child[]): HttpMatchStats {
+  return memoized(root, children).http;
 }
 
 /** Every child node an FQCN query names, via the children's PSR-4 maps. */
@@ -276,8 +313,22 @@ export function federatedWalk(
         if (direction === "in") visit(l.fromChild, l.sourceId, l.relation, depth, next);
         else visit(l.toChild, l.targetId, l.relation, depth, next);
       }
+      // A call from another repo is never resolved to the method itself, only to its
+      // class (the `use` that imports it), so a method's callers continue there.
+      if (direction === "in") {
+        for (const l of foreignUsersOfOwner(graphs, index, cur.child, cur.id)) visit(l.fromChild, l.sourceId, l.relation, depth, next);
+      }
     }
     frontier = next;
   }
   return hits;
+}
+
+/** Links from other repos into the class that owns method `id`. */
+function foreignUsersOfOwner(graphs: Map<string, GraphV1>, index: LinkIndex, child: string, id: string): CrossLink[] {
+  const graph = graphs.get(child)!;
+  if (nodeById(graph, id)?.kind !== "method") return [];
+  const owner = id.replace(/\.[^.#]+$/, "");
+  if (owner === id || !nodeById(graph, owner)) return [];
+  return (index.into.get(linkKey(child, owner)) ?? []).filter((l) => l.fromChild !== child);
 }
