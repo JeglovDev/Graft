@@ -54,7 +54,7 @@ import { buildGraphWithProgress } from "./claude/build-progress.js";
 import { installBrainsServer, installCursorBrainsServer, removeBrainsServer, removeCursorBrainsServer } from "./hosts/claude-global.js";
 import { upsertCodexToml } from "./hosts/mcp-config.js";
 import { homedir } from "node:os";
-import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, readPackageName, runUpgrade } from "./cli-meta.js";
+import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, readPackageName, runUpgrade, sourceCheckoutRoot } from "./cli-meta.js";
 import { nativeFallbackNotice } from "./graph/native.js";
 import { patchBuildConfig, type BuildConfig } from "./util/state.js";
 import { normalizePathPrefix } from "./util/paths.js";
@@ -437,6 +437,14 @@ program
 grouped(program.command("upgrade"), GROUP.setup)
   .description(`Upgrade the globally installed ${brand()} to the latest version on npm`)
   .action(() => {
+    const checkout = sourceCheckoutRoot(import.meta.url);
+    if (checkout) {
+      console.error(
+        `✗ ${brand()} runs from the git checkout ${checkout}; npm's release would replace it.\n` +
+          `  Update that checkout instead (merge upstream, then npm ci --ignore-scripts && npm run build).`,
+      );
+      process.exit(1);
+    }
     const result = runUpgrade(import.meta.url);
     console.log(formatUpgradeReport(result));
     if (result.ran && !result.ok) process.exit(1);

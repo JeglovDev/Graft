@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { readJson, writeJsonAtomic } from "../util/state.js";
 import { trailOnPath } from "../brand.js";
 import { repoPlace } from "../notes/home.js";
-import { readClouds, serverUrl, trailUrl, type Cloud } from "./workspace.js";
+import { cloudEnabled, readClouds, serverUrl, trailUrl, type Cloud } from "./workspace.js";
 
 export interface TeamFile {
   /** The Trail the workspace is on. */
@@ -75,6 +75,8 @@ export function teamLine(name: string, slug: string, installed = trailOnPath()):
 
 /** The same line for a Claude Code session in `dir`: only when this laptop isn't signed in to that team's workspace. Never throws. */
 export function teamSignInLine(dir: string, env: NodeJS.ProcessEnv = process.env): string {
+  // A committed workspace file must not make an agent sign in where the cloud is off.
+  if (!cloudEnabled(env)) return "";
   try {
     const team = teamWorkspace(repoPlace(dir, env).checkout, env);
     if (!team || readClouds(env).some((c) => c.workspace.slug === team.workspace)) return "";

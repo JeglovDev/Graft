@@ -91,6 +91,15 @@ export interface UpdateCache {
 
 /** Machine-global, not per-repo: "what's the latest graft" is one fact, and a
  * dev with twelve repos should cost the registry one request a day, not twelve. */
+/**
+ * Whether this build asks npm for a newer release and tells the agent about it.
+ * Off unless GRAFT_UPDATE_CHECK=1: a fork build is updated by merging upstream
+ * into its checkout, and npm's latest would replace the fork, not update it.
+ */
+export function updateCheckEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.GRAFT_UPDATE_CHECK === '1';
+}
+
 export function updateCachePath(home: string = homedir()): string {
   return join(home, '.graft', 'update-check.json');
 }
@@ -132,6 +141,7 @@ export function maybeRefreshInBackground(
   now = Date.now(),
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  if (!updateCheckEnabled(env)) return false;
   const doNotTrack = env.DO_NOT_TRACK;
   if (doNotTrack !== undefined && doNotTrack !== '' && doNotTrack !== '0') return false;
   const cache = readUpdateCache(home);
@@ -152,8 +162,12 @@ export function maybeRefreshInBackground(
 
 /** One line, or nothing. Nothing is the common case — don't spend context on
  * "you're up to date". */
-export function formatUpdateNudge(current: string, latest: string | null | undefined): string | null {
-  if (!isNewer(latest, current)) return null;
+export function formatUpdateNudge(
+  current: string,
+  latest: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (!updateCheckEnabled(env) || !isNewer(latest, current)) return null;
   // `upgrade`, not a bare npm install: under graft it brings the trail command along.
   return `⬆ ${brand()} ${current} → ${latest} available: run \`${brand()} upgrade\` (restart your agent after).`;
 }

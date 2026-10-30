@@ -23,8 +23,20 @@
 - **`GRAFT_NO_SAVINGS=1` drops the savings footer** from every tool output:
   the `[graft] tokens saved ≈ N` estimate and the nudge asking the agent to end
   its reply with a "graft saved ~N tokens" line. It also drops the
-  `learnings saved ≈ N` line and the session-start instruction to close each
-  reply with a tally.
+  `learnings saved ≈ N` line, the session-start instruction to close each
+  reply with a tally, and the tally section of the generated skill.
+
+### Changed
+
+- **No npm update check by default.** A fork build is updated by merging
+  upstream into its checkout, and npm's latest would replace the fork instead.
+  The daily registry check and the "X → Y available" line in CLI output, MCP
+  instructions and session start are off; `GRAFT_UPDATE_CHECK=1` turns them on.
+- **`graft upgrade` refuses to run from a git checkout** (an `npm i -g .` link)
+  and says to update the checkout instead.
+- **The Trail sign-in line follows the cloud switch.** A committed
+  `.trail/workspace.json` no longer tells the agent to run `login` while the
+  cloud is off (`TRAIL_CLOUD=0`, telemetry off, or a build without a key).
 
 ### Fixed
 

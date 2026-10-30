@@ -63,6 +63,10 @@ delete env.GRAFT_STORE;
 delete env.GRAFT_DIR;
 delete env.GRAFT_NO_SAVINGS;
 
+// The fork turns the npm update check off by default; upstream's tests of the
+// check and its nudge run with it on, test/fork-quiet.test.ts covers the default.
+env.GRAFT_UPDATE_CHECK = "1";
+
 const result = spawnSync(process.execPath, ["--import", "tsx", "--test", ...files], {
   cwd: repoRoot,
   stdio: "inherit",

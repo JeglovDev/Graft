@@ -14,6 +14,7 @@ import { brand, inBrand } from '../brand.js';
 import { canonicalToolName, GRAFT_MCP_TOOL_NAMES } from './tool-names.js';
 import { WorkspaceConnector, type RemotePrompt, type RemoteTool } from './connector.js';
 import { teamLine, teamWorkspace } from '../cloud/team-file.js';
+import { cloudEnabled } from '../cloud/workspace.js';
 import { KeptListing, within } from './kept-listing.js';
 
 /**
@@ -167,7 +168,7 @@ export function startMcpServer(root: string, dirOverride?: string, version = '0'
             instructions: [...local, ...remote].filter(Boolean).join('\n\n'),
           });
         if (!paired) {
-          const team = brainsOnly ? null : teamWorkspace(root);
+          const team = brainsOnly || !cloudEnabled() ? null : teamWorkspace(root);
           answer([brainsOnly ? NOT_CONNECTED_LINE : team ? teamLine(team.name, team.workspace) : '']);
           return;
         }

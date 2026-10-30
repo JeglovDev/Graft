@@ -57,6 +57,14 @@ export function isRunningViaNpx(moduleUrl: string): boolean {
   return toPosixPath(fileURLToPath(moduleUrl)).includes("/_npx/");
 }
 
+/** The git checkout this module runs from (an `npm i -g .` link to a fork or
+ * a clone), or null for a registry install. `npm install -g <pkg>@latest` on top
+ * of such a link replaces the checkout's build with the registry's. */
+export function sourceCheckoutRoot(moduleUrl: string): string | null {
+  const root = dirname(resolvePackageJsonPath(moduleUrl));
+  return existsSync(join(root, ".git")) ? root : null;
+}
+
 export interface NpmViewResult {
   ok: boolean;
   version?: string;

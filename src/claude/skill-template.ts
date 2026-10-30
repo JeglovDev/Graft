@@ -1,4 +1,5 @@
 import { cmd, type Brand } from "../brand.js";
+import { savingsEnabled } from "../context/savings.js";
 // The graft Claude Code skill, bundled as a string so `graft init` can write it into a
 // consumer repo's .claude/skills/graft/SKILL.md (no network fetch, version-locked to the
 // installed graft). This is the single source of truth for the skill text; graft's own
@@ -12,7 +13,14 @@ import { cmd, type Brand } from "../brand.js";
 export const SKILL_TEMPLATE_UPDATE_LINE = 'Trail may ask you to run `trail skills update <name> --offer <id>` only after the person typed yes to the change it showed.';
 
 export function skillTemplate(brand: Brand = "graft"): string {
-  return brand === "trail" ? trailSkill(graftSkill()) : graftSkill();
+  const text = brand === "trail" ? trailSkill(graftSkill()) : graftSkill();
+  return savingsEnabled() ? text : withoutSavingsTally(text);
+}
+
+/** GRAFT_NO_SAVINGS: the tool output carries no savings line, so the skill must
+ * not ask the agent to total one at the end of every reply. */
+function withoutSavingsTally(text: string): string {
+  return text.replace(/## Report what (?:graft|trail) saved, every turn\n[\s\S]*?\n(?=\*\*Never pipe)/, "");
 }
 
 /**
