@@ -100,6 +100,17 @@ export async function enrichWithLsp(
     return null;
   };
 
+  // A server without call hierarchy (phpactor) is asked `definition` at each call
+  // site inside a source's span instead: one request per call, not per function.
+  if (server.callSites && !client.provides("callHierarchyProvider") && client.provides("definitionProvider")) {
+    const r = await definitionPass({
+      graph, root, client, sources, nodeAt, linesOf, existing, byId,
+      callSites: server.callSites, notCalls: server.notCalls ?? new Set(), onProgress: opts.onProgress,
+    });
+    await client.dispose();
+    return { ...r, server: server.command };
+  }
+
   // Wait for the server to finish indexing (it answers call-hierarchy empty
   // until ready). Warm up on the first source node that has a findable position.
   const warm = sources.find((s) => namePos(s));
@@ -141,4 +152,64 @@ export async function enrichWithLsp(
   }
   await client.dispose();
   return { added, queried, server: server.command };
+}
+
+interface DefinitionPassInput {
+  graph: GraphV1;
+  root: string;
+  client: LspClient;
+  sources: NodeV1[];
+  nodeAt: (rel: string, line: number) => NodeV1 | null;
+  linesOf: (rel: string) => string[];
+  existing: Set<string>;
+  byId: Map<string, NodeV1>;
+  callSites: RegExp;
+  notCalls: ReadonlySet<string>;
+  onProgress?: (done: number, total: number) => void;
+}
+
+async function definitionPass(p: DefinitionPassInput): Promise<{ added: number; queried: number }> {
+  // A call the static pass already resolved to a target of that name costs no request.
+  const resolvedNames = new Map<string, Set<string>>();
+  for (const e of p.graph.edges) {
+    const t = e.relation === "calls" ? p.byId.get(e.target) : undefined;
+    if (!t) continue;
+    if (!resolvedNames.has(e.source)) resolvedNames.set(e.source, new Set());
+    resolvedNames.get(e.source)!.add(t.name);
+  }
+  let added = 0, queried = 0;
+  for (const [i, src] of p.sources.entries()) {
+    p.onProgress?.(i + 1, p.sources.length);
+    const sp = parseSpan(src.span);
+    if (!sp) continue;
+    const abs = join(p.root, src.path);
+    p.client.didOpen(abs);
+    const lines = p.linesOf(src.path);
+    for (let ln = sp[0] - 1; ln < Math.min(sp[1], lines.length); ln++) {
+      // Lines of a nested callable (a closure) belong to that node's own pass.
+      if (p.nodeAt(src.path, ln + 1)?.id !== src.id) continue;
+      const text = lines[ln] ?? "";
+      for (const m of text.matchAll(new RegExp(p.callSites.source, "g"))) {
+        const name = m[1];
+        if (p.notCalls.has(name.toLowerCase()) || resolvedNames.get(src.id)?.has(name)) continue;
+        const at = (m.index ?? 0) + m[0].indexOf(name);
+        if (/\bfunction\s+&?$/.test(text.slice(0, at))) continue; // a declaration, not a call
+        queried++;
+        const loc = await p.client.definition(abs, { line: ln, character: at });
+        if (!loc) continue;
+        let calleeAbs: string;
+        try { calleeAbs = fileURLToPath(loc.uri); } catch { continue; }
+        const rel = relPosix(p.root, calleeAbs);
+        if (rel.startsWith("..") || rel.startsWith("/")) continue; // external/dependency
+        const target = p.nodeAt(rel, loc.range.start.line + 1);
+        if (!target || target.id === src.id) continue;
+        const key = `${src.id}\0calls\0${target.id}`;
+        if (p.existing.has(key)) continue;
+        p.existing.add(key);
+        p.graph.edges.push({ source: src.id, target: target.id, relation: "calls", confidence: "lsp_resolved" } as EdgeV1);
+        added++;
+      }
+    }
+  }
+  return { added, queried };
 }

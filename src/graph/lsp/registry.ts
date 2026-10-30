@@ -14,7 +14,20 @@ export interface LspServer {
   args: string[];
   /** the LSP `languageId` to tag opened documents with. */
   languageId: string;
+  /** For a server without call hierarchy: the call sites to ask `definition` about.
+   * Group 1 is the called name; the request goes to its first character. */
+  callSites?: RegExp;
+  /** Names group 1 may match that are language syntax, not calls (`if (`, `array(`). */
+  notCalls?: ReadonlySet<string>;
 }
+
+/** PHP: `$o->m(`, `C::m(`, `new C(`, `f(` - the name right before the parenthesis. */
+const PHP_CALL_SITES = /([A-Za-z_]\w*)\s*\(/g;
+const PHP_NOT_CALLS: ReadonlySet<string> = new Set([
+  "if", "elseif", "for", "foreach", "while", "switch", "match", "catch", "fn", "function", "array", "list",
+  "isset", "empty", "unset", "eval", "exit", "die", "return", "echo", "print", "include", "include_once",
+  "require", "require_once", "declare", "use", "and", "or", "xor", "clone", "static", "self", "parent",
+]);
 
 /** First-match-wins; ordering is priority. Extend by adding a row. */
 export const LSP_SERVERS: readonly LspServer[] = [
@@ -22,6 +35,8 @@ export const LSP_SERVERS: readonly LspServer[] = [
   { languages: ["cpp", "c"], command: "clangd", args: ["--background-index"], languageId: "cpp" },
   { languages: ["go"], command: "gopls", args: [], languageId: "go" },
   { languages: ["python"], command: "pyright-langserver", args: ["--stdio"], languageId: "python" },
+  // phpactor has no call hierarchy: enrich.ts asks `definition` at each call site instead.
+  { languages: ["php"], command: "phpactor", args: ["language-server"], languageId: "php", callSites: PHP_CALL_SITES, notCalls: PHP_NOT_CALLS },
   { languages: ["typescript", "javascript", "tsx"], command: "typescript-language-server", args: ["--stdio"], languageId: "typescript" },
 ];
 

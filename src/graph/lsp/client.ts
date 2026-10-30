@@ -27,6 +27,8 @@ export interface CallHierarchyItem {
   selectionRange: LspRange;
 }
 
+export interface LspLocation { uri: string; range: LspRange }
+
 const uriOf = (abs: string): string => pathToFileURL(abs).toString();
 
 /** The JavaScript entry point an npm Windows shim (`<bin>.cmd`) runs: its last line is
@@ -72,6 +74,7 @@ export class LspClient {
   private opened = new Set<string>();
   private ready = false;
   private spawnFailed = false;
+  private capabilities: Record<string, unknown> = {};
 
   constructor(
     command: string,
@@ -155,6 +158,7 @@ export class LspClient {
       }).then((r) => { clearTimeout(t); resolve(r); }, () => { clearTimeout(t); resolve(null); });
     });
     if (!init) return false;
+    this.capabilities = (init as { capabilities?: Record<string, unknown> }).capabilities ?? {};
     this.conn.sendNotification("initialized", {});
     this.ready = true;
     return true;
@@ -168,9 +172,10 @@ export class LspClient {
     try { text = readFileSync(abs, "utf8"); } catch { return; }
     this.opened.add(abs);
     try {
-      this.conn.sendNotification("textDocument/didOpen", {
+      // The write is queued: a dispose right after it rejects the returned promise.
+      void this.conn.sendNotification("textDocument/didOpen", {
         textDocument: { uri: uriOf(abs), languageId: this.languageId, version: 1, text },
-      });
+      }).catch(() => { /* stream closed before the write */ });
     } catch { /* stream closed mid-write */ }
   }
 
@@ -202,6 +207,27 @@ export class LspClient {
     if (!this.ready) return [];
     const r = await this.call<Array<{ to: CallHierarchyItem }> | null>("callHierarchy/outgoingCalls", { item });
     return (r ?? []).map((c) => c.to).filter(Boolean);
+  }
+
+  /** Whether the server said it answers `name` (e.g. "callHierarchyProvider"). A
+   * server that leaves a provider out answers its requests with nothing. */
+  provides(name: string): boolean {
+    const v = this.capabilities[name];
+    return v !== undefined && v !== null && v !== false;
+  }
+
+  /** Where the symbol at `pos` is defined: the first location when the server
+   * returns several. */
+  async definition(abs: string, pos: LspPosition): Promise<LspLocation | null> {
+    if (!this.ready) return null;
+    type Link = { targetUri: string; targetSelectionRange: LspRange };
+    const r = await this.call<LspLocation | Array<LspLocation | Link> | null>("textDocument/definition", {
+      textDocument: { uri: uriOf(abs) },
+      position: pos,
+    });
+    const first = Array.isArray(r) ? r[0] : r;
+    if (!first) return null;
+    return "targetUri" in first ? { uri: first.targetUri, range: first.targetSelectionRange } : first;
   }
 
   async dispose(): Promise<void> {

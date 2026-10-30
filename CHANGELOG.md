@@ -4,6 +4,12 @@
 
 ### Added
 
+- **`graft build --lsp` covers PHP through phpactor.** phpactor answers no call
+  hierarchy, so for servers like it the pass asks `definition` at each call site
+  inside a function's span instead, skipping calls the static pass already
+  resolved by name. Receivers the AST can't type (`$this->repo->find()`, chained
+  facades) now get compiler-grade edges.
+
 - **`GRAFT_STORE` keeps graphs out of the checkout.** Each repo's graph and
   `.graft/config.json` move to `<store>/<repo-path-with-dashes>/`, and build no
   longer edits `.gitignore` or `.ignore`. One setting covers every repo, so it
