@@ -217,6 +217,27 @@ interface ChildRun {
   ranking?: AskRankingMetadata;
 }
 
+/**
+ * The children a workspace-level `--in` reaches, each with the part of the prefix
+ * that lies inside it (undefined: the whole child). Children can sit in grouping
+ * folders (`platform/bff`), so the prefix is compared segment by segment with the
+ * child's path: `platform/bff/app` scopes into one child, `platform` takes every
+ * child under it. A prefix that reaches no child is a caller mistake.
+ */
+function scopeChildren(wg: WorkspaceGraphs, prefix: string): Map<string, string | undefined> {
+  const p = prefix.replace(/^\.\/+/, "").replace(/\/+$/, "");
+  const out = new Map<string, string | undefined>();
+  for (const { child } of wg.loaded) {
+    if (p === child || child.startsWith(p + "/")) out.set(child, undefined);
+    else if (p.startsWith(child + "/")) out.set(child, p.slice(child.length + 1));
+  }
+  if (out.size === 0) {
+    const all = [...wg.loaded.map((l) => l.child), ...wg.missing].sort();
+    throw new Error(`no workspace repo under "${p}" - repos: ${all.join(", ")}`);
+  }
+  return out;
+}
+
 // STRONG_FLOOR / HIGH_FLOOR (a child federates if its top hit matched a
 // query term in a NAME/PATH field ≥ STRONG_FLOOR, OR its overall name+path+
 // body coverage is broad enough to be real even body-only, ≥ HIGH_FLOOR) are
@@ -253,25 +274,14 @@ export function federateAsk(
   const limit = opts.limit ?? 8;
   const fileTopLock = opts.fileTopLock ?? true;
 
-  // `--in` scopes to a single child (and, past the first segment, a sub-scope
-  // within it). A prefix naming no known child at all is a caller mistake.
-  let onlyChild: string | undefined;
-  let childIn: string | undefined;
-  if (opts.in) {
-    const prefix = opts.in.replace(/\/+$/, "");
-    const [name, ...rest] = prefix.split("/");
-    const allChildren = [...wg.loaded.map((l) => l.child), ...wg.missing].sort();
-    if (!allChildren.includes(name)) {
-      throw new Error(`no workspace repo "${name}" - repos: ${allChildren.join(", ")}`);
-    }
-    onlyChild = name;
-    childIn = rest.length ? rest.join("/") : undefined;
-  }
+  const scoped = opts.in ? scopeChildren(wg, opts.in) : null;
+  const onlyChild = scoped?.size === 1;
 
   // Pass 1: run each child's ask; keep its hits + RAW top-hit coverage.
   const runs: ChildRun[] = [];
   for (const { child } of wg.loaded) {
-    if (onlyChild && child !== onlyChild) continue;
+    if (scoped && !scoped.has(child)) continue;
+    const childIn = scoped?.get(child);
     let r: AskResult;
     try {
       // Over-fetch per child so cross-child fusion has enough candidates to
@@ -571,9 +581,10 @@ export function federateGrep(
   root: string,
   override: string | undefined,
   pattern: string,
-  opts: { ignoreCase?: boolean; fixed?: boolean } = {},
+  opts: { ignoreCase?: boolean; fixed?: boolean; in?: string } = {},
 ): { result: GrepResult; coverage: string } {
   const wg = loadWorkspaceGraphs(root, override);
+  const scoped = opts.in ? scopeChildren(wg, opts.in) : null;
   const links = workspaceLinks(root, wg.loaded);
   const groups: GrepGroup[] = [];
   let filesSearched = 0;
@@ -583,9 +594,11 @@ export function federateGrep(
   let savedChars = 0;
 
   for (const { child, graph } of wg.loaded) {
+    if (scoped && !scoped.has(child)) continue;
     const r = grepGraph(graph, join(root, child), pattern, {
       ignoreCase: opts.ignoreCase,
       fixed: opts.fixed,
+      in: scoped?.get(child),
     });
     filesSearched += r.filesSearched;
     totalHits += r.totalHits;
@@ -723,12 +736,15 @@ export function federateCallers(
     return [...local, ...cross.hits];
   };
 
+  const scoped = opts.in ? scopeChildren(wg, opts.in) : null;
   const blocks: string[] = [];
   let found = false;
   for (const { child, graph } of wg.loaded) {
+    if (scoped && !scoped.has(child)) continue;
+    const childIn = scoped?.get(child);
     const matches = byFqcn.length
       ? byFqcn.filter((f) => f.child === child).map((f) => f.node)
-      : resolveSymbol(graph, query, opts.in ? { in: opts.in } : {});
+      : resolveSymbol(graph, query, childIn ? { in: childIn } : {});
     if (matches.length === 0) continue;
     found = true;
     const results = matches.map((m) => ({ symbol: m, hits: walk(child, graph, m) }));

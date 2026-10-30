@@ -435,7 +435,7 @@ test("federated ask: --in <child> narrows to that child; --in <unknown> errors l
   assert.ok(federateAsk(p, undefined, "handler", { in: "repoA/" }).hits.every((h) => h.scope!.startsWith("repoA")));
   assert.throws(
     () => federateAsk(p, undefined, "handler", { in: "nope" }),
-    /no workspace repo "nope".*repoA.*repoB/s,
+    /no workspace repo under "nope".*repoA.*repoB/s,
   );
   rmSync(p, { recursive: true, force: true });
 });
@@ -531,5 +531,33 @@ test("readWorkspace: rejects foreign/invalid json as not-a-workspace", () => {
   assert.equal(readWorkspace(p), null);
   writeWorkspace(p, { version: 1, children: ["x", "a"] });
   assert.deepEqual(readWorkspace(p), { version: 1, children: ["a", "x"] });
+  rmSync(p, { recursive: true, force: true });
+});
+
+test("--in at the workspace root scopes nested children (platform/bff) for ask, grep and callers", async () => {
+  const p = workspaceFx({
+    "platform/bff": { "src/gate.ts": "export function gateHandler() { return needleThing(); }\nexport function needleThing() { return 1; }\n" },
+    "platform/bank": { "src/ledger.ts": "export function ledgerHandler() { return needleThing(); }\nfunction needleThing() { return 2; }\n" },
+    "sdk/client": { "lib/needle.ts": "export function needleClient() { return 3; }\n" },
+  });
+  await buildWorkspace(p);
+  const childOf = (path: string) => path.split("/").slice(0, 2).join("/");
+
+  const ask = federateAsk(p, undefined, "handler", { limit: 8, in: "platform/bff" });
+  assert.ok(ask.hits.length > 0 && ask.hits.every((h) => h.scope!.startsWith("platform/bff")), "ask: one nested child");
+
+  const grep = (inPrefix: string) => federateGrep(p, undefined, "needle", { in: inPrefix }).result.groups.map((g) => childOf(g.path));
+  assert.deepEqual([...new Set(grep("platform/bff"))], ["platform/bff"], "grep: one nested child");
+  assert.deepEqual([...new Set(grep("platform"))].sort(), ["platform/bank", "platform/bff"], "grep: a grouping folder takes its children");
+  assert.deepEqual(
+    [...new Set(federateGrep(p, undefined, "needle", { in: "platform/bff/src" }).result.groups.map((g) => g.path))],
+    ["platform/bff/src/gate.ts"],
+    "grep: a path inside the child",
+  );
+  assert.throws(() => federateGrep(p, undefined, "needle", { in: "platform/nope" }), /no workspace repo under "platform\/nope"/);
+
+  const callers = federateCallers(p, undefined, "needleThing", { in: "platform/bff" }).text;
+  assert.match(callers, /## platform\/bff\//);
+  assert.doesNotMatch(callers, /## platform\/bank\//, "callers: other children are left out");
   rmSync(p, { recursive: true, force: true });
 });

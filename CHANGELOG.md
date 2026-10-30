@@ -83,6 +83,12 @@
 
 ### Fixed
 
+- **`--in` at a workspace root reaches children in grouping folders.** `ask`
+  took the first segment as the child's name, so `--in platform/bff` failed
+  with "no workspace repo"; `callers` handed the whole prefix to every child,
+  and `grep` (and `graft_find_all`) ignored it. All three now match the prefix
+  against each child's path: `platform/bff/app` scopes inside one child,
+  `platform` takes every child under it.
 - **`npm test` no longer fails for a developer with `GRAFT_STORE`,
   `GRAFT_DIR` or `GRAFT_NO_SAVINGS` set.** The runner clears them; tests that
   need them set them.
