@@ -12,6 +12,7 @@ import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } 
 import { parseDepth, type SyntaxNode } from "./depth-parser.js";
 import { extractPhpHttp } from "./http-php.js";
 import type { FileHttpFacts } from "./http.js";
+import { extractPhpCalls, type FilePhpFacts } from "./php-calls.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
 export type Language = "typescript" | "tsx" | "python" | "go" | "java" | "kotlin" | "swift" | "php" | "r";
@@ -121,6 +122,8 @@ export interface ExtractResult {
   rawEdges: RawEdge[];
   /** Routes, mounts and request call sites (`http.ts`); PHP only, absent when none. */
   http?: FileHttpFacts;
+  /** Class typing and typed member calls (`php-calls.ts`); PHP only, absent when none. */
+  php?: FilePhpFacts;
 }
 
 /** Max chars of normalized body stored per symbol for search. Large enough that
@@ -424,7 +427,8 @@ function extractTree(rel: string, source: string, lang: Language, root: SyntaxNo
   // residual on the file node so a term outside every symbol still surfaces it.
   nodes[0].body_text = fileResidual(source, nodes.slice(1));
   const http = lang === "php" ? extractPhpHttp(source, root, nodes, importedSymbols) : undefined;
-  return http ? { nodes, rawEdges, http } : { nodes, rawEdges };
+  const php = lang === "php" ? extractPhpCalls(source, root, nodes, importedSymbols) : undefined;
+  return { nodes, rawEdges, ...(http ? { http } : {}), ...(php ? { php } : {}) };
 }
 
 /** Mint-time uniqueness: a document-order duplicate (same name reopened, or two

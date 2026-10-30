@@ -39,7 +39,7 @@ import { edgeWalk, resolveSymbol, type Direction, type EdgeHit } from "./travers
 import { wiringPath } from "./write.js";
 import type { GraphV1, NodeV1 } from "./types.js";
 import { isPhpFqcn } from "./composer.js";
-import { crossHits, federatedWalk, httpStats, linkKey, resolveFqcn, workspaceLinks } from "./workspace-links.js";
+import { crossHits, federatedWalk, httpStats, linkKey, methodStats, resolveFqcn, workspaceLinks } from "./workspace-links.js";
 import { readWorkspaceOptIn } from "../util/state.js";
 import {
   ask,
@@ -645,13 +645,21 @@ const AMBIGUOUS_SHOWN = 5;
 function linksNote(root: string, loaded: LoadedChild[]): string | null {
   const { links } = workspaceLinks(root, loaded);
   const s = httpStats(root, loaded);
-  if (links.length === 0 && s.calls === 0) return null;
-  const http = links.filter((l) => l.relation === "http").length;
+  const m = methodStats(root, loaded);
+  if (links.length === 0 && s.calls === 0 && m.calls === 0) return null;
+  const count = (via: string) => links.filter((l) => l.via === via).length;
   const lines = [
-    `links between repos: ${links.length - http} by Composer use, ${http} by HTTP route ` +
+    `links between repos: ${count("use")} by Composer use, ${count("method")} by method call, ${count("http")} by HTTP route ` +
       `(of ${s.calls} requests: ${s.ambiguous.length} ambiguous, ${s.verbMismatch} verb mismatch, ` +
       `${s.noHandler} closure or unresolved handler, ${s.unmatched} no route in another repo)`,
   ];
+  if (m.calls) {
+    lines.push(
+      `  distinct method calls leaving their repo: ${m.calls} (${m.linked} linked, ${m.inRepo} back in their own repo, ` +
+        `${m.external} to a class outside the workspace, ${m.untyped} stopped at an untyped step, ` +
+        `${m.noMethod} no such method, ${m.ambiguous} ambiguous)`,
+    );
+  }
   for (const a of s.ambiguous.slice(0, AMBIGUOUS_SHOWN)) {
     lines.push(`  ambiguous: ${a.call.method ?? "ANY"} /${a.call.path} from ${a.fromChild}/${a.call.source} → ${a.candidates.join(", ")}`);
   }

@@ -47,6 +47,19 @@
   calls it and `--depth 2` walks on to the repos that import that SDK class. A
   route served by more than one repo, or by two handlers, is left unlinked;
   `map` at the workspace root counts the links and lists those ambiguous requests.
+- **Workspace queries link method calls into another repo's methods (PHP,
+  static).** A call whose receiver types without running anything - a class
+  (`X::m()`, `$x::m()`), `new X`, `$this`, a typed or promoted property, a typed
+  parameter, a local assigned once, `app(X::class)` or `app('key')` - is walked
+  step by step through declared return types, `self`/`static`, `@return`, `@var`
+  and `@method` docblocks, traits and parent classes; a Laravel facade forwards
+  through its accessor and the provider binding (`->singleton('key', fn () => new X)`).
+  A chain that ends on one method of another repo becomes a `calls` link, so
+  `callers BalanceController.getUserBalance --depth 3` goes from the route over
+  the SDK method to the service methods that call `BankSDK::balance()->getUserBalance()`,
+  and `--direction out` from a service method lands in the SDK. A chain stops at
+  the first step that is untyped, missing or ambiguous (two repos defining the
+  class, two traits the method); `map` counts the outcomes.
 
 - **`GRAFT_NO_SAVINGS=1` drops the savings footer** from every tool output:
   the `[graft] tokens saved ≈ N` estimate and the nudge asking the agent to end

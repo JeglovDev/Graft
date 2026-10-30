@@ -158,4 +158,54 @@ export interface GraphV1 {
   /** HTTP routes and client calls, for links between the repos of a workspace.
    * Absent when the repo has neither, and on graphs built before this field. */
   http?: HttpFactsV1;
+  /** PHP class typing and the member calls that leave the repo, for method-level
+   * links between the repos of a workspace (`php-calls.ts`). Absent when the repo
+   * has none, and on graphs built before this field. */
+  php?: PhpFactsV1;
+}
+
+/** One class, interface, trait or enum. Type names are FQCNs, `self`/`static`
+ * already replaced by the class itself. Empty fields are omitted. */
+export interface PhpClassFactV1 {
+  id: string;
+  fqcn: string;
+  ext?: string;
+  impl?: string[];
+  traits?: string[];
+  /** method → the class it returns */
+  ret?: Record<string, string>;
+  /** property → its class */
+  props?: Record<string, string>;
+  /** `@method [static] T name()` → T */
+  doc?: Record<string, string>;
+  /** Facade accessor: `k:<key>` for a string, `c:<FQCN>` for `X::class`. */
+  acc?: string;
+}
+
+/** A container binding: `k` is the key string or the FQCN of `X::class`. */
+export interface PhpBindFactV1 {
+  k: string;
+  t: string;
+}
+
+/**
+ * A call `m` made by node `s` on a receiver `r` (a class FQCN, or `k:<key>` for a
+ * container key) reached through steps `p` (absent when none): `name()` calls a
+ * method, `name` reads a property. `st` marks a static root (`X::name()`), which
+ * is where a facade forwards. One entry per distinct call shape of a node.
+ */
+export interface PhpCallFactV1 {
+  s: string;
+  r: string;
+  st?: 1;
+  p?: string[];
+  m: string;
+}
+
+export interface PhpFactsV1 {
+  /** Classes that carry typing: a parent, interfaces, traits, return or property types, docblocks, an accessor. */
+  classes: PhpClassFactV1[];
+  binds: PhpBindFactV1[];
+  /** Calls whose chain reaches a class the repo does not define, from that class on. */
+  calls: PhpCallFactV1[];
 }

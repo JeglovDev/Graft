@@ -221,7 +221,7 @@ test("a route two other repos declare is ambiguous and gets no link; the most sp
   assert.match(federateCallers(p, undefined, "ItemController.save", {}).text, /http ← doRequest \(thing-sdk\/src\/Requests\/Store\.php/);
   // The workspace map says what matched and lists what did not.
   const map = federateMap(p, undefined);
-  assert.match(map, /links between repos: 1 by Composer use, 8 by HTTP route \(of 10 requests: 1 ambiguous, 0 verb mismatch, 0 closure or unresolved handler, 1 no route in another repo\)/);
+  assert.match(map, /links between repos: 1 by Composer use, 1 by method call, 8 by HTTP route \(of 10 requests: 1 ambiguous, 0 verb mismatch, 0 closure or unresolved handler, 1 no route in another repo\)/);
   assert.match(map, /ambiguous: ANY \/v2\/items\/lookup from thing-sdk\/src\/Requests\/Lookup\.php#Lookup\.doRequest → thing-service: /);
   assert.equal(stats.unmatched, 1, "POST /nowhere");
   rmSync(p, { recursive: true, force: true });

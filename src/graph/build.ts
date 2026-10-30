@@ -38,6 +38,7 @@ import { filterByOnlyDirs, listSourceStats } from "./source-files.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
 import { readComposerAutoload, type PhpAutoload } from "./composer.js";
 import { assembleHttp, type FileHttpFacts } from "./http.js";
+import { assemblePhpCalls, type FilePhpFacts } from "./php-calls.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
 import { writeCards, writeIndex, writeCovers, type CardStats } from "./cards.js";
@@ -241,6 +242,7 @@ export async function buildGraph(
   const nodes: NodeV1[] = [];
   const rawEdges: RawEdge[] = [];
   const httpFiles = new Map<string, FileHttpFacts>();
+  const phpFiles = new Map<string, FilePhpFacts>();
   const sources = new Map<string, string>();
   /** Display labels, not grammars — `.mjs` is parsed as typescript but reported as
    * javascript, or the banner claims a repo's JavaScript went unindexed. */
@@ -333,13 +335,14 @@ export async function buildGraph(
       nodes.push(...cached.nodes);
       rawEdges.push(...cached.rawEdges);
       if (cached.http) httpFiles.set(rel, cached.http);
+      if (cached.php) phpFiles.set(rel, cached.php);
       langs.add(label);
       return;
     }
 
     parsed++;
     try {
-      const { nodes: fileNodes, rawEdges: fileEdges, http } = lang
+      const { nodes: fileNodes, rawEdges: fileEdges, http, php } = lang
         ? extractFile(rel, source, lang)
         : container
           ? extractContainer(rel, source, container)
@@ -347,6 +350,7 @@ export async function buildGraph(
       nodes.push(...fileNodes);
       rawEdges.push(...fileEdges);
       if (http) httpFiles.set(rel, http);
+      if (php) phpFiles.set(rel, php);
       sources.set(rel, source);
       langs.add(label);
       entries[rel] = {
@@ -356,6 +360,7 @@ export async function buildGraph(
         nodes: fileNodes,
         rawEdges: fileEdges,
         ...(http ? { http } : {}),
+        ...(php ? { php } : {}),
         ...(via ? { via } : {}),
       };
     } catch (err) {
@@ -382,6 +387,7 @@ export async function buildGraph(
     phpAutoload,
   });
   const http = assembleHttp(httpFiles, nodes, phpAutoload);
+  const php = assemblePhpCalls(phpFiles, nodes, edges);
 
   // Guard 5 (minimum-substance): node counts aren't known until nodes are
   // assembled, so the merge-tiny-scopes-into-root guard runs here.
@@ -402,6 +408,7 @@ export async function buildGraph(
     nodes,
     edges,
     ...(http ? { http } : {}),
+    ...(php ? { php } : {}),
   };
 
   // graph.json is its own Tier-2 cache: fold in the prior meaning layer so an
