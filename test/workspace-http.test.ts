@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
-import { federateCallers, federateGrep, federateMap, loadWorkspaceGraphs, splitWorkspace } from "../src/graph/workspace.js";
+import { federateCallers, federateGrep, federateLinks, federateMap, loadWorkspaceGraphs, splitWorkspace } from "../src/graph/workspace.js";
 import { clientPath, matchHttp, normalizeRoutePath, pathScore } from "../src/graph/http.js";
 import { httpStats } from "../src/graph/workspace-links.js";
 import type { GraphV1 } from "../src/graph/types.js";
@@ -284,5 +284,28 @@ test("find_all counts http callers in a handler's in-degree", async () => {
   const r = federateGrep(p, undefined, "function get\\(", {});
   const g = r.result.groups.find((x) => x.path === "thing-service/app/Http/Controllers/ThingController.php");
   assert.ok(g && g.inDegree >= 1, `in-degree ${g?.inDegree}`);
+  rmSync(p, { recursive: true, force: true });
+});
+
+test("links lists every edge between repos with both ends, and the requests that found no route", async () => {
+  const p = await built();
+  const r = federateLinks(p, undefined);
+  const edge = (via: string, from: string, to: string) =>
+    r.links.find((l) => l.via === via && l.from.symbol === from && l.to.symbol === to);
+  const http = edge("http", "ThingApi.getThing", "ThingController.get");
+  assert.deepEqual(http?.from, { repo: "thing-sdk", symbol: "ThingApi.getThing", path: "src/ThingApi.php", span: "L6-L9" });
+  assert.equal(http?.to.repo, "thing-service");
+  assert.equal(http?.to.path, "app/Http/Controllers/ThingController.php");
+  assert.ok(edge("method", "Checkout.run", "ThingApi.getThing"), "a typed call into the SDK");
+  assert.ok(r.links.some((l) => l.via === "use" && l.from.repo === "shop" && l.to.repo === "thing-sdk"), "a Composer use");
+  assert.deepEqual(
+    r.unlinked.map((u) => `${u.reason} ${u.method} ${u.path} ${u.repo}`).sort(),
+    ["ambiguous null v2/items/lookup thing-sdk", "no-route POST nowhere thing-sdk"],
+  );
+  assert.deepEqual(r.unlinked.find((u) => u.reason === "no-route")?.symbol, "ThingApi.missing");
+
+  const narrowed = federateLinks(p, undefined, { from: "shop", via: "method" });
+  assert.ok(narrowed.links.length > 0 && narrowed.links.every((l) => l.from.repo === "shop" && l.via === "method"));
+  assert.ok(federateLinks(p, undefined, { to: "thing-service" }).links.every((l) => l.to.repo === "thing-service"));
   rmSync(p, { recursive: true, force: true });
 });

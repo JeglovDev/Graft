@@ -4,6 +4,14 @@
 
 ### Added
 
+- **`graft links` at a workspace root lists the edges between its repos.** Per
+  pair of repos it counts the Composer `use`, method-call and HTTP links; with
+  `--json` it gives every link with both ends (repo, symbol, path, span) and
+  every HTTP request left unlinked with the reason (`no-route`,
+  `verb-mismatch`, `no-handler`, `ambiguous`). `--from`, `--to` and `--via`
+  narrow it. It is the input for checks that span repos, such as "no service
+  calls the gateway" or "HTTP between services goes through the SDK".
+
 - **`graft build --lsp` covers PHP through phpactor.** phpactor answers no call
   hierarchy, so for servers like it the pass asks `definition` at each call site
   inside a function's span instead, skipping calls the static pass already

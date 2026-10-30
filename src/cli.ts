@@ -1180,6 +1180,41 @@ grouped(program.command("map"), GROUP.find)
     process.stdout.write(formatRepoMap(map));
   });
 
+grouped(program.command("links"), GROUP.find)
+  .description(
+    "Every edge between a workspace's repos (Composer use, method call, HTTP route) and the HTTP requests left unlinked: per pair, or all of it as JSON ($0, no LLM)",
+  )
+  .argument(...DIR_ARG)
+  .option("--from <path>", "keep links leaving repos at or under this path")
+  .option("--to <path>", "keep links landing in repos at or under this path")
+  .option("--via <kind>", "keep one kind: use | method | http")
+  .option("--json", "output every link and unlinked request as JSON")
+  .option(...NO_REFRESH_FLAG)
+  .action(async (dirArg: string | undefined, opts: { from?: string; to?: string; via?: string; json?: boolean; refresh?: boolean }) => {
+    const dir = noteQuery(queryRoot(dirArg));
+    const root = resolve(dir);
+    const globalOpts = program.opts<{ dir?: string }>();
+    if (opts.via !== undefined && !["use", "method", "http"].includes(opts.via)) {
+      console.error(`✗ --via must be use, method or http, got "${opts.via}"`);
+      process.exit(1);
+      return;
+    }
+    if (!readWorkspace(root, globalOpts.dir)) {
+      console.error(`✗ links are between the repos of a workspace: run ${cmd("graft build")} at its root first`);
+      process.exit(1);
+      return;
+    }
+    await refreshBefore(dir, opts);
+    const { federateLinks, formatLinksByPair } = await import("./graph/workspace.js");
+    const report = federateLinks(root, globalOpts.dir, {
+      from: opts.from,
+      to: opts.to,
+      via: opts.via as "use" | "method" | "http" | undefined,
+    });
+    if (opts.json) console.log(JSON.stringify(report, null, 2));
+    else process.stdout.write(formatLinksByPair(report));
+  });
+
 // `trail note`: what a session worked out, saved for the next person. Listed
 // under trail; under graft it still runs, unlisted, for a teammate on graft in
 // a repo where someone else set up trail.

@@ -419,7 +419,11 @@ export interface HttpMatchStats {
   /** A route has the path but not the verb. */
   verbMismatch: number;
   unmatched: number;
+  /** Every request left without a link, with the reason; the counts above tally it. */
+  unlinked: { fromChild: string; call: HttpCallV1; reason: UnlinkedReason }[];
 }
+
+export type UnlinkedReason = "no-route" | "verb-mismatch" | "no-handler" | "ambiguous";
 
 /**
  * Match every child's client calls to the other children's endpoints. Within the
@@ -428,7 +432,7 @@ export interface HttpMatchStats {
  * is no telling which service the client talks to, and no link is made.
  */
 export function matchHttp(children: { child: string; http?: HttpFactsV1 }[]): { matches: HttpMatch[]; stats: HttpMatchStats } {
-  const stats: HttpMatchStats = { calls: 0, linked: 0, ambiguous: [], noHandler: 0, verbMismatch: 0, unmatched: 0 };
+  const stats: HttpMatchStats = { calls: 0, linked: 0, ambiguous: [], noHandler: 0, verbMismatch: 0, unmatched: 0, unlinked: [] };
   const matches: HttpMatch[] = [];
   // Endpoints by first literal segment: a call only scans routes that could fit.
   type Entry = { child: string; e: HttpEndpointV1; segs: string[] };
@@ -469,6 +473,7 @@ export function matchHttp(children: { child: string; http?: HttpFactsV1 }[]): { 
       if (fit.length === 0) {
         if (pathOnly) stats.verbMismatch++;
         else stats.unmatched++;
+        stats.unlinked.push({ fromChild: child, call, reason: pathOnly ? "verb-mismatch" : "no-route" });
         continue;
       }
       const top = Math.max(...fit.map((f) => f.score));
@@ -479,11 +484,13 @@ export function matchHttp(children: { child: string; http?: HttpFactsV1 }[]): { 
       for (const b of best) handlers.set(`${b.child}\0${b.e.handler}`, b);
       if (handlers.size > 1) {
         stats.ambiguous.push({ fromChild: child, call, candidates: [...handlers.keys()].map((k) => k.replace("\0", ": ")).sort() });
+        stats.unlinked.push({ fromChild: child, call, reason: "ambiguous" });
         continue;
       }
       const [only] = handlers.values();
       if (only!.e.handler === null) {
         stats.noHandler++;
+        stats.unlinked.push({ fromChild: child, call, reason: "no-handler" });
         continue;
       }
       matches.push({ fromChild: child, call, toChild: only!.child, endpoint: only!.e });

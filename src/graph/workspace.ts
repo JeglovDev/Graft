@@ -40,6 +40,7 @@ import { wiringPath } from "./write.js";
 import type { GraphV1, NodeV1 } from "./types.js";
 import { isPhpFqcn } from "./composer.js";
 import { crossHits, federatedWalk, httpStats, linkKey, methodStats, resolveFqcn, workspaceLinks } from "./workspace-links.js";
+import type { UnlinkedReason } from "./http.js";
 import { readWorkspaceOptIn } from "../util/state.js";
 import {
   ask,
@@ -624,6 +625,81 @@ export function federateGrep(
   const saved: Savings | undefined = savedChars > 0 ? { files: savedFiles, baselineChars: savedChars } : undefined;
   const result: GrepResult = { pattern, filesSearched, totalHits, groups, truncated, saved };
   return { result, coverage: coverageNote(wg) };
+}
+
+/** One end of a link between repos: the node as its own repo names it. `symbol`
+ * is the part of the id after `#`, null for a file node. */
+export interface LinkEnd {
+  repo: string;
+  symbol: string | null;
+  path: string;
+  span: string | null;
+}
+
+export interface WorkspaceLinksReport {
+  links: { via: "use" | "method" | "http"; from: LinkEnd; to: LinkEnd }[];
+  /** HTTP requests that reached no single handler in another repo. */
+  unlinked: { repo: string; symbol: string | null; method: string | null; path: string; line: number; reason: UnlinkedReason }[];
+}
+
+/**
+ * Every edge between the workspace's repos (Composer `use`, typed method call,
+ * HTTP route) with both ends, and the HTTP requests left unlinked with the reason:
+ * the raw material for checks that span repos, which `callers` shows only one
+ * symbol at a time. `from`/`to` keep repos at or under a path prefix, `via` one kind.
+ */
+export function federateLinks(
+  root: string,
+  override: string | undefined,
+  opts: { from?: string; to?: string; via?: "use" | "method" | "http" } = {},
+): WorkspaceLinksReport {
+  const wg = loadWorkspaceGraphs(root, override);
+  const graphs = new Map(wg.loaded.map((c) => [c.child, c.graph]));
+  const under = (prefix: string | undefined, repo: string) => {
+    if (!prefix) return true;
+    const p = prefix.replace(/^\.\/+/, "").replace(/\/+$/, "");
+    return repo === p || repo.startsWith(p + "/");
+  };
+  const end = (repo: string, id: string): LinkEnd => {
+    const node = graphs.get(repo)?.nodes.find((n) => n.id === id);
+    const hash = id.indexOf("#");
+    return {
+      repo,
+      symbol: hash >= 0 ? id.slice(hash + 1) : null,
+      path: node?.path ?? (hash >= 0 ? id.slice(0, hash) : id),
+      span: node && node.kind !== "file" ? node.span : null,
+    };
+  };
+  const links = workspaceLinks(root, wg.loaded)
+    .links.filter((l) => (!opts.via || l.via === opts.via) && under(opts.from, l.fromChild) && under(opts.to, l.toChild))
+    .map((l) => ({ via: l.via, from: end(l.fromChild, l.sourceId), to: end(l.toChild, l.targetId) }));
+  const unlinked = httpStats(root, wg.loaded)
+    .unlinked.filter((u) => under(opts.from, u.fromChild))
+    .map((u) => {
+      const at = end(u.fromChild, u.call.source);
+      return { repo: u.fromChild, symbol: at.symbol, method: u.call.method, path: u.call.path, line: u.call.line, reason: u.reason };
+    });
+  return { links, unlinked };
+}
+
+/** Links between repos counted per pair, one line each: `from -> to: N (use a, method b, http c)`. */
+export function formatLinksByPair(report: WorkspaceLinksReport): string {
+  const pairs = new Map<string, { use: number; method: number; http: number }>();
+  for (const l of report.links) {
+    const key = `${l.from.repo} -> ${l.to.repo}`;
+    const c = pairs.get(key) ?? { use: 0, method: 0, http: 0 };
+    c[l.via]++;
+    pairs.set(key, c);
+  }
+  const lines = [...pairs.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, c]) => `${k}: ${c.use + c.method + c.http} (use ${c.use}, method ${c.method}, http ${c.http})`);
+  const reasons = new Map<string, number>();
+  for (const u of report.unlinked) reasons.set(u.reason, (reasons.get(u.reason) ?? 0) + 1);
+  if (report.unlinked.length) {
+    lines.push(`unlinked HTTP requests: ${report.unlinked.length} (${[...reasons].map(([r, n]) => `${r} ${n}`).join(", ")})`);
+  }
+  return lines.join("\n") + "\n";
 }
 
 /** One `graft map` section per child (each child's own map, budget split evenly
