@@ -18,6 +18,7 @@
  * degrade safely: no fingerprint → "unknown, rebuild"; no parse cache → the
  * rebuild is just cold.
  */
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { CACHE_DIR } from "../context/node-file.js";
 import { contentHash } from "../util/id.js";
@@ -25,6 +26,7 @@ import { readSourceFile } from "../util/source.js";
 import { readJson, writeJsonAtomic } from "../util/state.js";
 import { extractorStamp, pruneSidecars, type ExtractEntry } from "./extract-cache.js";
 import { listSourceStats } from "./source-files.js";
+import { wiringPath } from "./write.js";
 
 export const FINGERPRINT_PREFIX = "fingerprint";
 const FINGERPRINT_VERSION = 1;
@@ -49,6 +51,11 @@ export interface Fingerprint {
    * clean and queries would keep answering from nodes the old extractor built. */
   extractor: string;
   files: Record<string, Print>;
+  /** `[size, mtimeMs]` of the wiring.json this build wrote. Prints are filed per
+   * extractor but the graph is shared: another graft on the same repo (an MCP server
+   * started before an upgrade) can rewrite it while these prints still match the tree,
+   * so a graph that is not the one recorded here is not ours to trust. */
+  graph?: [number, number];
   /** Repo-relative directory prefixes this build was limited to (`--only-dir`).
    * Absent = full tree. Recorded here — not in the source repo's `.graft/config.json`
    * — so the query-path freshness probe (which never sees a CLI flag) enumerates the
@@ -78,7 +85,33 @@ export function readFingerprint(outDir: string): Fingerprint | null {
   const f = readJson<Fingerprint>(fingerprintPath(outDir));
   if (!f || f.version !== FINGERPRINT_VERSION || typeof f.files !== "object" || !f.files) return null;
   if (f.extractor !== stamp()) return null; // different extractor — re-extract, don't trust these prints
+  const graph = graphStat(outDir);
+  if (!f.graph || !graph || f.graph[0] !== graph[0] || f.graph[1] !== graph[1]) return null; // not the graph we wrote
   return f;
+}
+
+function graphStat(outDir: string): [number, number] | null {
+  try {
+    const s = statSync(wiringPath(outDir));
+    return [s.size, s.mtimeMs];
+  } catch {
+    return null;
+  }
+}
+
+/** Claim the wiring.json now on disk as the one these prints describe. For a graph
+ * placed rather than built (a seed copied from the main checkout): the prints came
+ * along with it, but its file stats are new. Best-effort, like writeFingerprint. */
+export function restampGraph(outDir: string): boolean {
+  const f = readJson<Fingerprint>(fingerprintPath(outDir));
+  const graph = graphStat(outDir);
+  if (!f || !graph) return false;
+  try {
+    writeJsonAtomic(fingerprintPath(outDir), { ...f, graph }, true);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Project the extraction cache's entries into the probe sidecar. Best-effort:
@@ -93,6 +126,8 @@ export function writeFingerprint(
   for (const [rel, e] of Object.entries(entries)) files[rel] = [e.size, e.mtimeMs, e.hash];
   try {
     const record: Fingerprint = { version: FINGERPRINT_VERSION, extractor: stamp(), files };
+    const graph = graphStat(outDir);
+    if (graph) record.graph = graph;
     if (onlyDirs && onlyDirs.length > 0) record.onlyDirs = onlyDirs;
     writeJsonAtomic(fingerprintPath(outDir), record, true);
     pruneSidecars(join(outDir, CACHE_DIR), FINGERPRINT_PREFIX);

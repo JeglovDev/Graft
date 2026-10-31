@@ -48,7 +48,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { ASK_INDEX_FILE } from "../ask/index-file.js";
 import { CACHE_DIR, contextDirFor } from "../context/node-file.js";
 import { EXTRACT_CACHE_PREFIX } from "./extract-cache.js";
-import { FINGERPRINT_PREFIX } from "./fingerprint.js";
+import { FINGERPRINT_PREFIX, restampGraph } from "./fingerprint.js";
 import { GRAPH_DIR, wiringPath } from "./write.js";
 
 /** The one line a linked worktree's `.git` file carries. */
@@ -221,6 +221,7 @@ export function seedGraph(root: string, opts: { contextDir?: string } = {}): See
     if (!existsSync(srcGraph)) return NOT_SEEDED; // parent never built either
     copyTree(srcDir, outDir);
     installGraph(srcGraph, wiringPath(outDir));
+    restampGraph(outDir);
     return { seeded: true, from: main };
   } catch {
     return NOT_SEEDED;

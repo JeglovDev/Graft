@@ -389,6 +389,23 @@ test("a fingerprint from a different extractor is not trusted", async () => {
   assert.equal(probeDrift(d, outOf(d)), null);
 });
 
+test("a graph another graft wrote over ours is not trusted", async () => {
+  const d = repo();
+  await buildGraph(d);
+  assert.ok(isClean(probeDrift(d, outOf(d))!));
+
+  // Two grafts on one repo keep separate prints but share wiring.json: an MCP server
+  // started before an upgrade rebuilds it with the old extractor. Our prints still
+  // match the tree byte for byte, yet the graph is no longer the one they describe.
+  writeFileSync(wiringPath(outOf(d)), JSON.stringify({ ...graphOf(d), nodes: [], edges: [] }));
+  assert.equal(probeDrift(d, outOf(d)), null);
+
+  const r = await ensureFreshGraph(d);
+  assert.equal(r.refreshed, true);
+  assert.equal(hasSymbol(d, "src/math.ts#add"), true, "the rebuild restores what the other graft dropped");
+  assert.ok(isClean(probeDrift(d, outOf(d))!), "and is trusted again afterwards");
+});
+
 test("a workspace refreshes its children even under a --dir override", async () => {
   const d = mkdtempSync(join(tmpdir(), "graft-refresh-ws-"));
   const child = join(d, "api");
